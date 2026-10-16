@@ -18,11 +18,19 @@ while True:
         now_str = time.strftime('%H:%M:%S')
         print(f"\n[{now_str}] Сканирование новых сообщений на Авито...")
         unread = client.get_unread_chats(limit=30)
-        
-        if unread:
-            print(f"Найдено непрочитанных диалогов: {len(unread)}")
+        recent = client.get_recent_chats(limit=30)
+
+        seen = set()
+        all_chats = []
+        for c in (unread + recent):
+            cid = c.get('id')
+            if cid and cid not in seen:
+                seen.add(cid)
+                all_chats.append(c)
+
+        if all_chats:
             sent = 0
-            for c in unread:
+            for c in all_chats:
                 try:
                     if process_single_chat(c):
                         sent += 1
