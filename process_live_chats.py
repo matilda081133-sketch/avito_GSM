@@ -46,7 +46,7 @@ def create_b24_call_task(candidate_name: str, vacancy: str, phone: str, details:
             'TITLE': f"📞 ПОЗВОНИТЬ: {candidate_name} ({vacancy[:30]})",
             'DESCRIPTION': desc,
             'RESPONSIBLE_ID': responsible_id,
-            'PRIORITY': 2 # High priority
+            'PRIORITY': 2
         }
     }).encode('utf-8')
     req = urllib.request.Request(B24_WEBHOOK_URL + 'tasks.task.add', data=payload, headers={'Content-Type': 'application/json'})
@@ -59,7 +59,6 @@ def create_b24_call_task(candidate_name: str, vacancy: str, phone: str, details:
 
 def send_b24_notification(title: str, text: str, chat_id: str, phone: str = ""):
     avito_chat_url = f"https://www.avito.ru/profile/messenger/channel/{chat_id}"
-    
     msg_parts = [
         f"🚨 [B]{title}[/B]",
         f"💬 {text}",
@@ -69,7 +68,6 @@ def send_b24_notification(title: str, text: str, chat_id: str, phone: str = ""):
     msg_parts.append(f"👉 [URL={avito_chat_url}]Открыть чат на Авито[/URL]")
     
     full_msg = "\n".join(msg_parts)
-    
     for uid in NOTIFY_USER_IDS:
         payload = json.dumps({'USER_ID': uid, 'MESSAGE': full_msg}).encode('utf-8')
         req = urllib.request.Request(B24_WEBHOOK_URL + 'im.notify.system.add', data=payload, headers={'Content-Type': 'application/json'})
@@ -78,6 +76,16 @@ def send_b24_notification(title: str, text: str, chat_id: str, phone: str = ""):
                 pass
         except Exception as e:
             pass
+
+def format_age(a):
+    try:
+        n = int(a)
+        if 11 <= n % 100 <= 14: return f"{n} лет"
+        elif n % 10 == 1: return f"{n} год"
+        elif 2 <= n % 10 <= 4: return f"{n} года"
+        else: return f"{n} лет"
+    except:
+        return f"{a} лет"
 
 def process_single_chat(chat_summary):
     chat_id = chat_summary.get('id')
@@ -99,38 +107,60 @@ def process_single_chat(chat_summary):
 
     msgs = list(reversed(raw_msgs))
     
-    # 0. СТРОГАЯ ПРОВЕРКА ИСТОРИИ НА ПРИОСТАНОВКУ / ОТКАЗ / НЕАКТУАЛЬНОСТЬ
+    # =========================================================================
+    # ПРАВИЛО 1: СТРОГАЯ ПРОВЕРКА ИСТОРИИ НА ПРИОСТАНОВКУ / ОТКАЗ / СТОП-ФАКТОРЫ
+    # =========================================================================
     all_chat_texts = " ".join([str(m.get('content', {}).get('text', '')).lower() for m in msgs])
-    stop_words = [
-        "приостанов", "набор закрыт", "вакансия закрыта", "вакансия неактуальн",
-        "не готовы предложить", "вынуждены отказать", "не подходите", "не подходит",
-        "больше не пишите", "уже устроился", "уже нашел", "уже нашла", "не актуально",
-        "неактуально", "не беспокойте", "отменили"
+    
+    stop_phrases = [
+        "остановили выбор", "других кандидатах", "не соответствует требованиям",
+        "сохраним ваши контакты", "приостанов", "набор закрыт", "вакансия закрыта",
+        "вакансия неактуальн", "не готовы предложить", "вынуждены отказать",
+        "не подходите", "не подходит", "больше не пишите", "уже устроился",
+        "уже нашел", "уже нашла", "не актуально", "неактуально", "не беспокойте",
+        "отменили", "✘ кандидат не соответствует"
     ]
-    if any(sw in all_chat_texts for sw in stop_words):
-        print(f"Skipping chat {chat_id} ({cand_name}): найдено сообщение о приостановке/отказе в истории переписки!")
+    if any(sp in all_chat_texts for sp in stop_phrases):
+        print(f"Skipping chat {chat_id} ({cand_name}): найдено сообщение об отказе/приостановке в истории переписки!")
         return False
 
     last_msg = msgs[-1]
     
-    # If the last message was sent by US, nothing to reply to right now
+    # Если последнее сообщение отправлено НАМИ — ничего не пишем
     if last_msg.get('author_id') == AVITO_USER_ID:
         return False
 
-    # СТРОГИЙ ФИЛЬТР СВЕЖЕСТИ: не отвечать на старые отклики (старше 24 часов)
+    # =========================================================================
+    # ПРАВИЛО 2: СТРОГИЙ ФИЛЬТР СВЕЖЕСТИ (НЕ ОТВЕЧАТЬ СТАРЫМ ОТКЛИКАМ СТАРШЕ 24 ЧАСОВ)
+    # =========================================================================
     msg_timestamp = last_msg.get('created', 0)
     hours_ago = (time.time() - msg_timestamp) / 3600.0
     if hours_ago > 24.0:
+        print(f"Skipping old chat {chat_id} (last message was {hours_ago:.1f} hours ago)")
         return False
 
-    last_text = last_msg.get('content', {}).get('text', '')
+    last_text = last_msg.get('content', {}).get('text', '').strip()
     if not last_text or "не поддерживается" in last_text.lower():
         return False
 
-    print(f"\n=======================================================")
-    print(f"Chat: {chat_id} | Candidate: {cand_name} | Ad: {item_title}")
-    print(f"Last text: {last_text}")
+    # =========================================================================
+    # ПРАВИЛО 3: КОРОТКИЕ ЗАКРЫВАЮЩИЕ РЕПЛИКИ ВЕЖЛИВОСТИ (CLOSING MESSAGES)
+    # Если кандидат просто написал «спасибо», «хорошо», «понятно» — НЕ НАДО СПАМИТЬ!
+    # =========================================================================
+    clean_last = re.sub(r'[^а-яa-z\s]', '', last_text.lower()).strip()
+    closing_words = ["спасибо", "хорошо спасибо", "спасибо большое", "ясно", "понятно", "ок", "хорошо", "договорились", "до свидания"]
+    if clean_last in closing_words:
+        # Проверяем, было ли уже наше сообщение в диалоге
+        had_our_msg = any(m.get('author_id') == AVITO_USER_ID for m in msgs)
+        if had_our_msg:
+            print(f"Skipping chat {chat_id}: кандидат просто ответил вежливостью ('{last_text}'), диалог уже закрыт.")
+            return False
 
+    print(f"\n=======================================================")
+    print(f"Processing chat: {chat_id} | Candidate: {cand_name} | Ad: {item_title}")
+    print(f"Last candidate message: {last_text}")
+
+    # Извлечение всех известных параметров из истории
     known_phone = ""
     known_age = ""
     known_cit = ""
@@ -156,65 +186,6 @@ def process_single_chat(chat_summary):
         if m_plain_age and 18 <= int(m_plain_age.group(1)) <= 70:
             known_age = m_plain_age.group(1)
 
-    # 1. Если кандидат прислал номер телефона
-    current_phone = extract_phone(last_text)
-    if current_phone:
-        reply = (
-            "Спасибо, контакты зафиксировала! Координатор свяжется с вами для согласования всех деталей и даты выхода. "
-            "Если появятся вопросы — пишите прямо сюда в чат, мы на связи!"
-        )
-        client.send_message(chat_id, reply)
-        print(">>> SENT phone confirmation acknowledgment.")
-        
-        # Отправляем видное уведомление в Битрикс24 менеджерам!
-        send_b24_notification(
-            title=f"КАНДИДАТ ОСТАВИЛ ТЕЛЕФОН: {cand_name or known_fio}",
-            text=f"Вакансия: {item_title}",
-            chat_id=chat_id,
-            phone=current_phone
-        )
-        
-        # СТАВИМ ЗАДАЧУ МЕНЕДЖЕРУ НА ЗВОНОК С ВЫСОКИМ ПРИОРИТЕТОМ
-        create_b24_call_task(
-            candidate_name=cand_name or known_fio,
-            vacancy=item_title,
-            phone=current_phone,
-            details=f"Кандидат оставил телефон в чате: {current_phone}\nВозраст: {known_age or 'уточняется'}\nГражданство: {known_cit or 'РФ'}",
-            chat_id=chat_id
-        )
-        return True
-
-    # 2. Если спрашивают как связаться / телефон
-    t_lower = last_text.lower()
-    if any(w in t_lower for w in ["связа", "позвон", "номер", "телефон", "сохран", "контакт"]):
-        direct_phone = get_uis_phone_for_vacancy(item_title)
-        reply = (
-            f"Вы можете позвонить нам напрямую по номеру {direct_phone} (звонок бесплатный). "
-            f"Это прямой номер координатора объекта!\n\n"
-            f"Либо напишите, в какое время вам удобно принять звонок, и мы вас наберем!"
-        )
-        client.send_message(chat_id, reply)
-        print(">>> SENT direct UIS contact number.")
-        send_b24_notification(
-            title=f"Кандидат запросил контакты: {cand_name}",
-            text=f"Выдан номер {direct_phone} по вакансии {item_title}",
-            chat_id=chat_id
-        )
-        return True
-
-    # 3. Вопросы про локацию
-    if any(w in t_lower for w in ["где", "находит", "локац", "адрес", "добира", "салтыков", "кучин"]):
-        if any(w in item_title.lower() for w in ["зоо", "смарт", "балаших"]):
-            reply = (
-                "Склад зоотоваров находится в Балашихе (микрорайон Салтыковка, Носовихинское шоссе). "
-                "От станций «Салтыковская» или «Кучино» добираться 5–10 минут на транспорте (МЦД-4 либо автобусы 142, 100).\n\n"
-                "Подскажите, в каком районе вы проживаете и когда вам удобно выйти на первую смену?"
-            )
-            client.send_message(chat_id, reply)
-            print(">>> SENT location answer.")
-            return True
-
-    # 4. Формирование ответа с уважением к известным данным анкеты
     first_name = ""
     if known_fio:
         parts = known_fio.strip().split()
@@ -226,20 +197,105 @@ def process_single_chat(chat_summary):
         first_name = cand_name.split()[0].capitalize()
 
     greeting = f"Здравствуйте, {first_name}!" if first_name else "Здравствуйте!"
-    
-    def format_age(a):
-        try:
-            n = int(a)
-            if 11 <= n % 100 <= 14: return f"{n} лет"
-            elif n % 10 == 1: return f"{n} год"
-            elif 2 <= n % 10 <= 4: return f"{n} года"
-            else: return f"{n} лет"
-        except:
-            return f"{a} лет"
 
+    # =========================================================================
+    # СЦЕНАРИЙ А: КАНДИДАТ ПРИСЛАЛ НОМЕР ТЕЛЕФОНА
+    # =========================================================================
+    current_phone = extract_phone(last_text)
+    if current_phone:
+        reply = (
+            "Спасибо, контакты зафиксировала! Координатор свяжется с вами для согласования всех деталей и даты выхода. "
+            "Если появятся вопросы — пишите прямо сюда в чат, мы на связи!"
+        )
+        client.send_message(chat_id, reply)
+        print(">>> SENT phone confirmation acknowledgment.")
+        
+        send_b24_notification(
+            title=f"КАНДИДАТ ОСТАВИЛ ТЕЛЕФОН: {first_name or cand_name}",
+            text=f"Вакансия: {item_title}",
+            chat_id=chat_id,
+            phone=current_phone
+        )
+        create_b24_call_task(
+            candidate_name=first_name or cand_name,
+            vacancy=item_title,
+            phone=current_phone,
+            details=f"Кандидат оставил телефон в чате: {current_phone}\nВозраст: {format_age(known_age) if known_age else 'уточняется'}\nГражданство: {known_cit or 'РФ'}",
+            chat_id=chat_id
+        )
+        return True
+
+    # =========================================================================
+    # СЦЕНАРИЙ Б: КАНДИДАТ СПРАШИВАЕТ «КАК СВЯЗАТЬСЯ / НОМЕР ДЛЯ ЗВОНКА»
+    # =========================================================================
+    t_lower = last_text.lower()
+    if any(w in t_lower for w in ["связа", "позвон", "номер", "телефон", "сохран", "контакт"]):
+        direct_phone = get_uis_phone_for_vacancy(item_title)
+        reply = (
+            f"Вы можете позвонить напрямую по номеру {direct_phone} (звонок бесплатный). "
+            f"Это прямой номер координатора объекта!\n\n"
+            f"Либо напишите, в какое время вам удобно принять звонок, и мы вас наберем!"
+        )
+        client.send_message(chat_id, reply)
+        print(">>> SENT direct UIS contact number.")
+        send_b24_notification(
+            title=f"Кандидат запросил контакты: {first_name or cand_name}",
+            text=f"Выдан номер {direct_phone} по вакансии {item_title}",
+            chat_id=chat_id
+        )
+        return True
+
+    # =========================================================================
+    # СЦЕНАРИЙ В: КАНДИДАТ ЗАДАЛ КОНКРЕТНЫЙ ВОПРОС (ГРАФИК / ОПЛАТА / АДРЕС)
+    # МЫ ОБЯЗАНЫ ОТВЕТИТЬ ПРЯМО НА ЕГО ВОПРОС!
+    # =========================================================================
+    
+    # 1. Вопрос про график (3-4 дня, подработка, день/ночь, часы смены)
+    if any(w in t_lower for w in ["график", "с каких", "до каких", "часов", "ночн", "дневн", "смен", "подработк", "дня в неделю"]):
+        reply = (
+            f"{greeting} Да, конечно! График согласовывается индивидуально: можно выходить на подработку "
+            f"3–4 дня в неделю или в ваши свободные дни, а также совмещать дневные и ночные смены.\n"
+            f"Дневные смены обычно с 08:00 до 20:00, ночные — с 20:00 до 08:00 (предусмотрены перерывы и обед).\n\n"
+        )
+        if known_age:
+            reply += f"По возрасту ({format_age(known_age)}) всё отлично подходит!\n"
+        reply += (
+            "Подскажите, в каком районе вы проживаете и когда вам удобно выйти на первую смену?\n"
+            "И напишите ваш контактный номер телефона — координатор наберет вас и закрепит за вами график!"
+        )
+        client.send_message(chat_id, reply)
+        print(">>> SENT detailed schedule & part-time answer.")
+        return True
+
+    # 2. Вопрос про адрес / где находится / локацию / как добраться
+    if any(w in t_lower for w in ["где", "находит", "локац", "адрес", "добира", "салтыков", "кучин"]):
+        if any(w in item_title.lower() for w in ["зоо", "смарт", "балаших"]):
+            reply = (
+                f"{greeting} Склад зоотоваров находится в Балашихе (микрорайон Салтыковка, Носовихинское шоссе). "
+                f"От станций «Салтыковская» или «Кучино» добираться всего 5–10 минут на транспорте (МЦД-4 либо автобусы 142, 100).\n\n"
+                f"Подскажите, в каком районе вы проживаете и с какого числа готовы выйти на первую смену?\n"
+                f"И напишите ваш контактный номер — координатор наберет вас и подскажет точный маршрут!"
+            )
+            client.send_message(chat_id, reply)
+            print(">>> SENT location answer.")
+            return True
+
+    # 3. Вопрос про ставку / сколько платят / выплаты
+    if any(w in t_lower for w in ["скольк", "оплат", "плат", "ставк", "зарплат", "деньг", "в час"]):
+        reply = (
+            f"{greeting} Ставка на объекте составляет от 3 600 до 4 200 ₽ за смену (чистыми на руки), выплаты официальные без задержек!\n\n"
+            f"Подскажите, в каком районе вы проживаете и когда готовы выйти на смену?\n"
+            f"И напишите ваш контактный номер телефона для связи — координатор наберет и всё подробно расскажет."
+        )
+        client.send_message(chat_id, reply)
+        print(">>> SENT salary/rate answer.")
+        return True
+
+    # =========================================================================
+    # СЦЕНАРИЙ Г: ПЕРВИЧНЫЙ ОТКЛИК (ЕСЛИ ДАННЫЕ УКАЗАНЫ — НЕ ПЕРЕСПРАШИВАТЬ!)
+    # =========================================================================
     missing_questions = []
     
-    # ЕСЛИ ВОЗРАСТ И ГРАЖДАНСТВО УКАЗАНЫ — НЕ ПЕРЕСПРАШИВАТЬ!
     if known_age and known_cit:
         status_line = f"Вижу вашу анкету ({format_age(known_age)}, {known_cit}) — данные актуальны?\n"
     elif known_age:
@@ -273,19 +329,11 @@ def process_single_chat(chat_summary):
     return True
 
 if __name__ == '__main__':
-    print("Fetching unread chats from Avito...")
+    print("Manual check of live unread chats...")
     unread_chats = client.get_unread_chats(limit=30)
     print(f"Total unread chats fetched: {len(unread_chats)}")
-    
-    sent_count = 0
     for c in unread_chats:
         try:
-            if process_single_chat(c):
-                sent_count += 1
-                time.sleep(1.5)
-                if sent_count >= 5:
-                    break
+            process_single_chat(c)
         except Exception as e:
             print("Error processing chat:", e)
-
-    print(f"\nDone batch! Sent {sent_count} live answers.")
