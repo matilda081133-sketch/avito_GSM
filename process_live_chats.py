@@ -1,6 +1,7 @@
 import urllib.request, json, ssl, time, sys, re
 from avito_api import AvitoClient
 from ai_engine import AIRecruiterEngine, extract_phone, get_uis_phone_for_vacancy
+from vacancy_rules import detect_vacancy_profile, evaluate_candidate_fit
 from config import AVITO_CLIENT_ID, AVITO_CLIENT_SECRET, AVITO_USER_ID, B24_WEBHOOK_URL
 
 sys.stdout.reconfigure(encoding='utf-8')
@@ -246,28 +247,59 @@ def process_single_chat(chat_summary):
         return True
 
     # =========================================================================
-    # СЦЕНАРИЙ В: КАНДИДАТ ЗАДАЛ КОНКРЕТНЫЙ ВОПРОС (ГРАФИК / ОПЛАТА / АДРЕС)
-    # МЫ ОБЯЗАНЫ ОТВЕТИТЬ ПРЯМО НА ЕГО ВОПРОС!
+    # СЦЕНАРИЙ В: КАНДИДАТ ЗАДАЛ КОНКРЕТНЫЙ ВОПРОС (ГРАФИК / ОПЛАТА / АДРЕС / ВОЗРАСТ)
+    # МЫ ОБЯЗАНЫ ОТВЕТИТЬ ПРЯМО НА ЕГО ВОПРОС БЕЗ ЛОЖНЫХ ОБЕЩАНИЙ!
     # =========================================================================
-    
+    vac_prof = detect_vacancy_profile(item_title)
+    eval_res = evaluate_candidate_fit(vac_prof, known_age, known_cit)
+
+    # Проверка на несовершеннолетие (строгий стоп-фактор)
+    if eval_res["status"] == "UNDERAGE":
+        reply = (
+            f"{greeting} К сожалению, по требованиям охраны труда на наших объектах трудоустройство возможно строго с 18 лет. "
+            f"Будем рады сотрудничеству, когда вам исполнится 18!"
+        )
+        client.send_message(chat_id, reply)
+        print(">>> SENT underage polite refusal.")
+        return True
+
     # 1. Вопрос про график (3-4 дня, подработка, день/ночь, часы смены)
     if any(w in t_lower for w in ["график", "с каких", "до каких", "часов", "ночн", "дневн", "смен", "подработк", "дня в неделю"]):
         reply = (
-            f"{greeting} Да, конечно! График согласовывается индивидуально: можно выходить на подработку "
-            f"3–4 дня в неделю или в ваши свободные дни, а также совмещать дневные и ночные смены.\n"
-            f"Дневные смены обычно с 08:00 до 20:00, ночные — с 20:00 до 08:00 (предусмотрены перерывы и обед).\n\n"
-        )
-        if known_age:
-            reply += f"По возрасту ({format_age(known_age)}) всё отлично подходит!\n"
-        reply += (
-            "Подскажите, в каком районе вы проживаете и когда вам удобно выйти на первую смену?\n"
-            "И напишите ваш контактный номер телефона — координатор наберет вас и закрепит за вами график!"
+            f"{greeting}\n"
+            f"По графику на позиции «{vac_prof['name']}»:\n"
+            f"• Смены: дневные обычно с 08:00 до 20:00, ночные — с 20:00 до 08:00 (предусмотрены перерывы и обед).\n"
+            f"• Подработка: график согласуется — возможен выход 3–4 дня в неделю или в ваши свободные дни, а также совмещение дневных и ночных смен.\n\n"
+            f"По требованиям объекта: возраст от {vac_prof['min_age']} до {vac_prof['max_age']} лет. "
+            f"Окончательное согласование графика и запись проводит координатор объекта при проверке документов.\n\n"
+            f"Подскажите, пожалуйста:\n"
+            f"1. В каком районе вы проживаете и когда вам удобно выйти на первую смену?\n"
+            f"2. Ваш контактный номер телефона для связи — координатор наберет вас и зафиксирует запись!"
         )
         client.send_message(chat_id, reply)
-        print(">>> SENT detailed schedule & part-time answer.")
+        print(">>> SENT detailed schedule & part-time answer (verified against vacancy).")
         return True
 
-    # 2. Вопрос про адрес / где находится / локацию / как добраться
+    # 2. Вопрос про возраст / подхожу ли я по возрасту
+    if any(w in t_lower for w in ["подойд", "возраст", "45", "49", "50", "55", "60", "пенсион"]):
+        if eval_res["status"] == "OVERAGE":
+            reply = (
+                f"{greeting} По регламенту данного объекта («{vac_prof['name']}») рассматриваются кандидаты до {vac_prof['max_age']} лет "
+                f"из-за интенсивных физических нагрузок на смене. Окончательное решение о допуске или наличии альтернативных легких участков "
+                f"принимает координатор объекта при звонке. Напишите ваш номер телефона для консультации с координатором."
+            )
+        else:
+            reply = (
+                f"{greeting} По позиции «{vac_prof['name']}» базовый возрастной критерий — от {vac_prof['min_age']} до {vac_prof['max_age']} лет. "
+                f"Мы не даем предварительных гарантий в переписке — финальное согласование и запись проводит координатор объекта после сверки анкеты и документов.\n\n"
+                f"Подскажите, в каком районе вы проживаете и с какого числа готовы выйти на смену?\n"
+                f"И напишите ваш контактный номер телефона для связи."
+            )
+        client.send_message(chat_id, reply)
+        print(">>> SENT neutral age criteria explanation (no false promises).")
+        return True
+
+    # 3. Вопрос про адрес / где находится / локацию / как добраться
     if any(w in t_lower for w in ["где", "находит", "локац", "адрес", "добира", "салтыков", "кучин"]):
         if any(w in item_title.lower() for w in ["зоо", "смарт", "балаших"]):
             reply = (
@@ -280,10 +312,11 @@ def process_single_chat(chat_summary):
             print(">>> SENT location answer.")
             return True
 
-    # 3. Вопрос про ставку / сколько платят / выплаты
+    # 4. Вопрос про ставку / сколько платят / выплаты
     if any(w in t_lower for w in ["скольк", "оплат", "плат", "ставк", "зарплат", "деньг", "в час"]):
+        rate_str = vac_prof.get("rate", "от 3 600 до 4 200 ₽ за смену (чистыми на руки)")
         reply = (
-            f"{greeting} Ставка на объекте составляет от 3 600 до 4 200 ₽ за смену (чистыми на руки), выплаты официальные без задержек!\n\n"
+            f"{greeting} Ставка на объекте составляет {rate_str}, выплаты официальные без задержек!\n\n"
             f"Подскажите, в каком районе вы проживаете и когда готовы выйти на смену?\n"
             f"И напишите ваш контактный номер телефона для связи — координатор наберет и всё подробно расскажет."
         )
@@ -294,15 +327,39 @@ def process_single_chat(chat_summary):
     # =========================================================================
     # СЦЕНАРИЙ Г: ПЕРВИЧНЫЙ ОТКЛИК (ЕСЛИ ДАННЫЕ УКАЗАНЫ — НЕ ПЕРЕСПРАШИВАТЬ!)
     # =========================================================================
-    missing_questions = []
-    
-    if known_age and known_cit:
-        status_line = f"Вижу вашу анкету ({format_age(known_age)}, {known_cit}) — данные актуальны?\n"
-    elif known_age:
-        status_line = f"По возрасту ({format_age(known_age)}) всё отлично подходит!\n"
+    if eval_res["status"] == "OVERAGE":
+        reply = (
+            f"{greeting} Вакансия актуальна. По регламенту объекта «{vac_prof['name']}» "
+            f"рассматриваются кандидаты до {vac_prof['max_age']} лет (смены на ногах). "
+            f"Возможность записи или альтернативные участки согласует координатор объекта при звонке.\n\n"
+            f"Подскажите ваш контактный номер телефона для связи?"
+        )
+        client.send_message(chat_id, reply)
+        print(">>> SENT overage notification (no false approval).")
+        return True
+
+    profile_parts = []
+    if known_age:
+        profile_parts.append(format_age(known_age))
+    if known_cit:
+        profile_parts.append(f"гражданство {known_cit}")
+
+    if profile_parts:
+        status_line = (
+            f"Вижу вашу анкету ({', '.join(profile_parts)}).\n"
+            f"По объекту «{vac_prof['name']}» базовые требования: возраст от {vac_prof['min_age']} до {vac_prof['max_age']} лет. "
+            f"Окончательное согласование и запись на смену проводит координатор после сверки документов.\n"
+        )
     else:
         status_line = ""
+
+    missing_questions = []
+    if not known_age and not known_cit:
         missing_questions.append("Ваш возраст и гражданство")
+    elif not known_age:
+        missing_questions.append("Ваш возраст")
+    elif not known_cit:
+        missing_questions.append("Ваше гражданство")
 
     missing_questions.append("В каком районе вы проживаете и с какого числа готовы выйти на смену")
     if not known_phone:
@@ -318,7 +375,7 @@ def process_single_chat(chat_summary):
     )
 
     client.send_message(chat_id, reply)
-    print(">>> SENT tailored response (respecting known profile).")
+    print(">>> SENT tailored response (respecting known profile and vacancy criteria).")
     
     send_b24_notification(
         title=f"Отклик взят в работу: {first_name or cand_name}",
