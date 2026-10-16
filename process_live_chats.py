@@ -139,6 +139,23 @@ def extract_candidate_ready_date(text: str) -> str:
         return m.group(0).strip()
     return ""
 
+def get_cabinet_uis_phone(item_id: str = "", item_title: str = "") -> str:
+    """
+    Возвращает официальный номер коллтрекинга UIS, привязанный к данному объявлению в кабинете Авито.
+    Категорически запрещено давать личные или прямые номера бригадиров/координаторов!
+    Только подтвержденные номера UIS из выгрузки объявлений кабинета.
+    """
+    SDS_ITEMS_WITH_925 = [
+        "8276181745", "8510931894", "7442184610", "8178841067", "8326652344",
+        "8304949277", "8177989785", "8418775858", "8082177117", "8282883310",
+        "8394589818", "8434943096"
+    ]
+    t = (item_title or "").lower()
+    if str(item_id) in SDS_ITEMS_WITH_925 or any(w in t for w in ["уборщик на теплый склад", "уборщик служебных", "поломоечн"]):
+        return "+7 (925) 087-81-44"
+    else:
+        return "+7 (958) 565-19-78"
+
 def process_single_chat(chat_summary):
     chat_id = chat_summary.get('id')
     users = chat_summary.get('users', [])
@@ -190,17 +207,29 @@ def process_single_chat(chat_summary):
     if not new_candidate_msgs:
         return False
 
-    # Фильтр свежести: проверяем самое свежее входящее сообщение
+    # Фильтр свежести: строго не старше 6 часов!
+    # Категорический запрет на реанимацию старых чатов прошлых дней (10 октября и т.д.)
     latest_msg = new_candidate_msgs[-1]
     msg_timestamp = latest_msg.get('created', 0)
     hours_ago = (time.time() - msg_timestamp) / 3600.0
-    if hours_ago > 36.0:
+    if hours_ago > 6.0:
         return False
 
     # Собираем весь текст новых сообщений от кандидата
     new_text_list = [str(m.get('content', {}).get('text', '')).strip() for m in new_candidate_msgs]
     new_text = " \n ".join([t for t in new_text_list if t and "не поддерживается" not in t.lower()]).strip()
     if not new_text:
+        return False
+
+    # Если кандидат НЕ написал ни одного живого сообщения (только системный отклик)
+    # и прошло больше 2 часов — не отправлять ничего с опозданием
+    has_real_cand_text = any(
+        not t.startswith("[Системное сообщение]") and
+        "данные сохранились" not in t.lower() and
+        "кандидат откликнулся" not in t.lower()
+        for t in new_text_list
+    )
+    if not has_real_cand_text and hours_ago > 2.0:
         return False
 
     # =========================================================================
@@ -352,18 +381,20 @@ def process_single_chat(chat_summary):
     # СЦЕНАРИЙ 3: КАНДИДАТ СПРАШИВАЕТ «КАК СВЯЗАТЬСЯ / ПРЯМОЙ НОМЕР»
     # =========================================================================
     if t_new_lower and any(w in t_new_lower for w in ["как связа", "позвон", "прямой номер", "какой номер", "номер для связи"]):
+        item_id_str = str(context.get('value', {}).get('id', ''))
+        uis_phone = get_cabinet_uis_phone(item_id_str, item_title)
         if phone_known:
             reply = (
-                f"{prefix}Координатор объекта сам оперативно свяжется с вами по указанному номеру {known_phone}, "
-                f"ответит на все вопросы и согласует запись на смену!"
+                f"{prefix}Номер телефона из объявления: {uis_phone} (звонок бесплатный). "
+                f"Также координатор объекта свяжется с вами по указанному номеру {known_phone} для согласования записи на смену!"
             )
         else:
             reply = (
-                f"{prefix}Координаторы объектов сами связываются с кандидатами для согласования деталей и записи. "
-                f"Напишите ваш контактный номер телефона, и координатор наберет вас в ближайшее время!"
+                f"{prefix}Номер телефона из объявления: {uis_phone} (звонок бесплатный). "
+                f"Либо оставьте ваш контактный номер телефона, и координатор наберет вас сам в ближайшее время!"
             )
         client.send_message(chat_id, reply)
-        print(">>> SENT coordinator callback process explanation.")
+        print(f">>> SENT official cabinet UIS tracking phone {uis_phone} from ad.")
         sync_candidate_to_b24_deal(chat_id, cand_data_dict)
         return True
 
