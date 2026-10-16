@@ -96,31 +96,45 @@ def format_age(a):
 def extract_candidate_district(text: str) -> str:
     if not text:
         return ""
-    # Удаляем системные уведомления Авито
+    # Очищаем системные уведомления Авито
     cleaned = re.sub(r'\[Системное сообщение\].*?(?:\n|$)', '', text, flags=re.IGNORECASE)
     cleaned = re.sub(r'данные сохранились.*?(?:\n|$)', '', cleaned, flags=re.IGNORECASE)
     cleaned = re.sub(r'кандидат откликнулся.*?(?:\n|$)', '', cleaned, flags=re.IGNORECASE)
     cleaned = re.sub(r'отклики.*?(?:\n|$)', '', cleaned, flags=re.IGNORECASE)
-    
-    # Удаляем системные поля ФИО и Гражданство, чтобы отчество (например Владимировна) не путалось с городом (Владимир)
     cleaned = re.sub(r'ФИО\s*[—\-:]\s*[^\n\r]+', '', cleaned, flags=re.IGNORECASE)
     cleaned = re.sub(r'Гражданство\s*[—\-:]\s*[^\n\r]+', '', cleaned, flags=re.IGNORECASE)
     
+    known_places = [
+        "петушки", "салтыковка", "кучино", "балашиха", "железнодорожный",
+        "реутов", "люберцы", "химки", "москва", "зарайск", "кашира",
+        "владимир", "опалиха", "красногорск", "павловский посад", "новогиреево"
+    ]
+    for p in known_places:
+        if re.search(rf'\b{re.escape(p)}[а-я]*\b', cleaned.lower()):
+            return p.capitalize()
+
     m_dist = re.search(r'\b(?:живу в|район|живу на|метро|город|г\.|ст\.|станци[яи]|\bиз\b|\bс\b)\s+([а-яa-z\-]+(?:\s+[а-яa-z\-]+)?)', cleaned, re.IGNORECASE)
     if m_dist:
         match_str = m_dist.group(1).strip()
         stop_words = ["москвы", "области", "россии", "работы", "опыта", "вами", "связаться", "сообщение", "отклики", "раздела", "вакансию", "сохранились", "этого"]
         if match_str.lower() not in stop_words and len(match_str) > 2:
             return match_str.capitalize()
-    
-    known_places = [
-        "петушки", "салтыковка", "кучино", "балашиха", "железнодорожный",
-        "реутов", "люберцы", "химки", "москва", "зарайск", "кашира",
-        "владимир", "опалиха", "красногорск", "павловский посад"
-    ]
-    for p in known_places:
-        if re.search(rf'\b{re.escape(p)}\b', cleaned.lower()):
-            return p.capitalize()
+
+    return ""
+
+def extract_candidate_ready_date(text: str) -> str:
+    if not text:
+        return ""
+    t_low = text.lower()
+    m = re.search(
+        r'\b(?:на\s+завтра|завтра|сегодня|со\s+следующей\s+недели|'
+        r'с\s+понедельник[а-я]*|со\s+вторник[а-я]*|со?\s+среды|с\s+четверг[а-я]*|с\s+пятниц[а-я]*|в\s+выходные|'
+        r'хоть\s+сейчас|хоть\s+завтра|прямо\s+сейчас|готов[а-я]*\s+выйти|могу\s+выйти|выйти\s+с|выйти\s+со|'
+        r'с\s+\d{1,2}(?:\s+[а-я]+|\.\d{2})?|на\s+этой\s+неделе)\b', 
+        t_low
+    )
+    if m:
+        return m.group(0).strip()
     return ""
 
 def process_single_chat(chat_summary):
@@ -196,7 +210,7 @@ def process_single_chat(chat_summary):
         return False
 
     # =========================================================================
-    # СБОР И АНАЛИЗ ВСЕЙ ИСТОРИИ ДИАЛОГА
+    # СБОР И АНАЛИЗ ВСЕЙ ИСТОРИИ ДИАЛОГА (СТРОГАЯ ПАМЯТЬ)
     # =========================================================================
     all_cand_msgs = [m for m in msgs if m.get('author_id') != AVITO_USER_ID]
     all_our_msgs = [m for m in msgs if m.get('author_id') == AVITO_USER_ID]
@@ -204,12 +218,12 @@ def process_single_chat(chat_summary):
     all_cand_text = " \n ".join([str(m.get('content', {}).get('text', '')) for m in all_cand_msgs])
     all_our_text = " \n ".join([str(m.get('content', {}).get('text', '')) for m in all_our_msgs]).lower()
 
-    # Телефон: проверяем сначала в новых сообщениях, затем во всей истории кандидата
+    # 1. Телефон
     new_phone = extract_phone(new_text)
     known_phone = new_phone or extract_phone(all_cand_text)
     phone_known = bool(known_phone)
 
-    # Имя, возраст, гражданство из системных блоков анкеты
+    # 2. Имя, возраст, гражданство из системных блоков анкеты
     known_age = ""
     known_cit = ""
     known_fio = ""
@@ -237,21 +251,25 @@ def process_single_chat(chat_summary):
     if not first_name and cand_name:
         first_name = cand_name.split()[0].capitalize()
 
-    # Район / город проживания
+    # 3. Район / город проживания
     cand_district = extract_candidate_district(all_cand_text)
     district_known = bool(cand_district)
 
-    # Дата готовности к выходу
-    cand_ready_date = ""
-    m_date = re.search(r'(?:готов[а-я]* выйти|выйти|с|со)\s*(\d{1,2}(?:\s+[а-я]+|\.\d{2})?|завтра|понедельник[а-я]*|сегодня)', all_cand_text, re.IGNORECASE)
-    if m_date:
-        cand_ready_date = m_date.group(1).strip()
+    # 4. Дата готовности к выходу
+    cand_ready_date = extract_candidate_ready_date(all_cand_text)
     ready_date_known = bool(cand_ready_date)
 
-    # Что мы УЖЕ спрашивали у кандидата в переписке (чтобы не повторяться!)
+    # 5. Что мы УЖЕ спрашивали у кандидата в переписке (чтобы не повторяться!)
     already_asked_district = ("в каком районе" in all_our_text or "где вы проживаете" in all_our_text or "где проживаете" in all_our_text)
     already_asked_date = ("с какого числа" in all_our_text or "когда готовы" in all_our_text or "когда вам удобно" in all_our_text)
     already_asked_phone = ("номер телефона" in all_our_text or "номер для связи" in all_our_text or "контактный номер" in all_our_text)
+
+    # 6. Актуализировали ли мы уже анкету
+    already_verified_profile = any(
+        phrase in all_our_text for phrase in [
+            "данные актуальны", "вижу вашу анкету", "вижу анкету", "анкета актуальна"
+        ]
+    )
 
     # =========================================================================
     # ПРАВИЛО 4: СТРОЖАЙШИЙ ЗАПРЕТ НА ПОВТОРНЫЕ ПРИВЕТСТВИЯ В ОДИН ДЕНЬ
@@ -287,7 +305,7 @@ def process_single_chat(chat_summary):
     print(f"\n=======================================================")
     print(f"Chat: {chat_id} | Candidate: {cand_name} | Already greeted: {already_greeted}")
     print(f"Clean candidate text: '{t_new_lower}'")
-    print(f"Phone known: {phone_known} ({known_phone}) | District known: {district_known} ({cand_district})")
+    print(f"Phone known: {phone_known} ({known_phone}) | District: {district_known} ({cand_district}) | Date: {ready_date_known} ({cand_ready_date})")
 
     # =========================================================================
     # СЦЕНАРИЙ 1: СТОП-ФАКТОР ПО ВОЗРАСТУ (МЛАДШЕ 18 ЛЕТ)
@@ -335,13 +353,45 @@ def process_single_chat(chat_summary):
         sync_candidate_to_b24_deal(chat_id, cand_data_dict)
         return True
 
+    # Блок верификации анкеты (если еще не верифицировали)
+    profile_parts = []
+    if known_age:
+        profile_parts.append(format_age(known_age))
+    if known_cit:
+        profile_parts.append(f"гражданство {known_cit}")
+
+    if profile_parts:
+        verification_block = f"Вижу вашу анкету ({', '.join(profile_parts)}) — подскажите, данные актуальны?"
+    else:
+        verification_block = "Подскажите ваш возраст и гражданство — данные актуальны?"
+
     # =========================================================================
-    # СЦЕНАРИЙ 4: ВОПРОСЫ ПО ВАКАНСИИ (ОПЛАТА, ГРАФИК, АДРЕС, СТОЯЧАЯ/СИДЯЧАЯ)
+    # СЦЕНАРИЙ 4: КАНДИДАТ ОТВЕТИЛ «ДА / ВСЁ ВЕРНО / АКТУАЛЬНО» НА НАШ ВОПРОС ПО АНКЕТЕ
+    # =========================================================================
+    if already_verified_profile and t_new_lower in ["да", "актуально", "да актуально", "все верно", "всё верно", "верно", "всё так", "все так", "конечно", "верны", "да все верно", "да всё верно"]:
+        needed_questions = []
+        if not district_known and not already_asked_district:
+            needed_questions.append("В каком районе вы проживаете?")
+        if not ready_date_known and not already_asked_date:
+            needed_questions.append("С какого числа готовы выйти на смену?")
+        if not phone_known:
+            needed_questions.append("И напишите номер телефона для связи — координатор наберет и запишет вас.")
+        else:
+            needed_questions.append(f"Координатор свяжется с вами по номеру {known_phone} для согласования записи!")
+
+        reply = f"{prefix}Отлично! " + " ".join(needed_questions)
+        client.send_message(chat_id, reply)
+        print(">>> SENT profile confirmation acknowledgment + next missing questions.")
+        sync_candidate_to_b24_deal(chat_id, cand_data_dict)
+        return True
+
+    # =========================================================================
+    # СЦЕНАРИЙ 5: ВОПРОСЫ ПО ВАКАНСИИ (ОПЛАТА, ГРАФИК, АДРЕС, СТОЯЧАЯ/СИДЯЧАЯ)
     # =========================================================================
     answered_intent = False
     answer_parts = []
 
-    # 4.1. Вопрос про периодичность выплат / ежедневная оплата
+    # 5.1. Вопрос про периодичность выплат / ежедневная оплата
     if any(w in t_new_lower for w in ["каждый день", "ежедневн", "каждую смену", "2 раза", "раз в месяц", "раз в неделю", "когда расчет", "как оплачива", "как у вас оплата", "как с оплатой", "когда оплата"]):
         answered_intent = True
         vac_lower = item_title.lower()
@@ -353,13 +403,13 @@ def process_single_chat(chat_summary):
             rate_str = vac_prof.get("rate", "от 3 600 до 4 200 ₽ за смену")
             answer_parts.append(f"Ставка {rate_str}, выплаты официальные и регулярные без задержек.")
 
-    # 4.2. Вопрос про ставку / сколько платят
+    # 5.2. Вопрос про ставку / сколько платят
     elif any(w in t_new_lower for w in ["скольк", "ставк", "зарплат", "деньг", "в час"]):
         answered_intent = True
         rate_str = vac_prof.get("rate", "от 3 600 до 4 200 ₽ за смену")
         answer_parts.append(f"Ставка на объекте составляет {rate_str}, выплаты без задержек.")
 
-    # 4.3. Вопрос про график / смены / часы / подработку
+    # 5.3. Вопрос про график / смены / часы / подработку
     if any(w in t_new_lower for w in ["график", "с каких", "до каких", "часов", "ночн", "дневн", "смен", "подработк", "дня в неделю"]):
         answered_intent = True
         answer_parts.append(
@@ -367,7 +417,7 @@ def process_single_chat(chat_summary):
             "На подработку можно выходить по 3–4 смены в неделю в удобные дни."
         )
 
-    # 4.4. Вопрос про адрес / где находится / как добираться
+    # 5.4. Вопрос про адрес / где находится / как добираться
     if any(w in t_new_lower for w in ["где", "находит", "локац", "адрес", "добира", "салтыков", "кучин", "далеко"]):
         answered_intent = True
         if any(w in item_title.lower() for w in ["зоо", "смарт", "балаших"]):
@@ -377,7 +427,7 @@ def process_single_chat(chat_summary):
         else:
             answer_parts.append(f"Объект: {item_title}. Координатор подробно сориентирует по маршруту.")
 
-    # 4.5. Вопрос: сидячая или стоячая работа / нагрузка
+    # 5.5. Вопрос: сидячая или стоячая работа / нагрузка
     if any(w in t_new_lower for w in ["сидяч", "стояч", "на ногах", "физическ", "тяжел"]):
         answered_intent = True
         vac_lower = item_title.lower()
@@ -386,22 +436,41 @@ def process_single_chat(chat_summary):
         else:
             answer_parts.append("Работа активная в движении (комплектовка и упаковка на складе), предусмотрены перерывы на отдых и обед.")
 
-    # 4.6. "Не успела прочитать" / "повторите" / "что за работа"
+    # 5.6. "Не успела прочитать" / "повторите" / "что за работа"
     if any(w in t_new_lower for w in ["не успел", "не прочитал", "повтори", "что за работа"]):
         answered_intent = True
         rate_str = vac_prof.get("rate", "от 3 600 до 4 200 ₽ за смену")
         answer_parts.append(f"Напоминаю условия: {item_title}. Ставка {rate_str}, выплаты без задержек.")
 
+    # 5.7. Вопрос про запись / можно ли выйти / записаться на завтра / смену
+    if any(w in t_new_lower for w in ["записа", "выйти на смену", "на завтра", "с завтра", "когда можно выйти"]):
+        answered_intent = True
+        answer_parts.append("Записаться на смену возможность есть, как раз согласовываем график.")
+
     # =========================================================================
-    # СЦЕНАРИЙ 5: СВЯЗКА ОТВЕТА С ФИКСАЦИЕЙ ДАННЫХ ИЛИ СЛЕДУЮЩИМ ШАГОМ
+    # СЦЕНАРИЙ 6: ОБРАБОТКА ТЕЛЕФОНА ИЛИ ОТВЕТОВ НА ВОПРОСЫ
     # =========================================================================
+    # Формируем список ТОЛЬКО тех вопросов, на которые кандидат ЕЩЁ НЕ ДАВАЛ ответа
+    # и которые мы ЕЩЁ НЕ СПРАШИВАЛИ!
+    needed_questions = []
+    if not district_known and not already_asked_district:
+        needed_questions.append("В каком районе вы проживаете?")
+    if not ready_date_known and not already_asked_date:
+        needed_questions.append("С какого числа готовы выйти на смену?")
+    if not phone_known:
+        if not already_asked_phone:
+            needed_questions.append("И напишите номер телефона для связи — координатор наберет и согласует запись.")
+        else:
+            needed_questions.append("Подскажите контактный номер для звонка координатора.")
+
     # Если кандидат прислал НОВЫЙ телефон прямо сейчас
     if new_phone:
         ack_phone_str = f"Номер {new_phone} зафиксировала!"
+        lead_block = f"{verification_block}\n" if not already_verified_profile else ""
         if answer_parts:
-            reply = f"{prefix}{ack_phone_str} " + " ".join(answer_parts) + "\nКоординатор свяжется с вами для записи на смену!"
+            reply = f"{prefix}{lead_block}{ack_phone_str} " + " ".join(answer_parts) + "\nКоординатор свяжется с вами для записи на смену!"
         else:
-            reply = f"{prefix}Спасибо, номер {new_phone} зафиксировала! Координатор свяжется с вами для записи и ответит на все вопросы."
+            reply = f"{prefix}{lead_block}Спасибо, номер {new_phone} зафиксировала! Координатор свяжется с вами для записи и ответит на все вопросы."
         
         client.send_message(chat_id, reply)
         print(">>> SENT phone acknowledgment + answers.")
@@ -424,71 +493,64 @@ def process_single_chat(chat_summary):
 
     # Если мы ответили на конкретные вопросы кандидата
     if answered_intent:
+        lead_block = f"{verification_block}\n" if not already_verified_profile else ""
         main_answer = " ".join(answer_parts)
-        if phone_known:
-            closing_step = "Координатор наберет вас по указанному номеру и согласует запись на смену!"
-        elif not already_asked_phone:
-            closing_step = "Напишите ваш контактный номер телефона для связи — координатор наберет и согласует запись."
-        else:
-            closing_step = "Подскажите номер для звонка координатора, чтобы записаться на смену."
+        
+        closing_parts = []
+        if needed_questions:
+            closing_parts.append(" ".join(needed_questions))
+        elif phone_known:
+            closing_parts.append(f"Координатор наберет вас по номеру {known_phone} и согласует запись на смену!")
 
-        reply = f"{prefix}{main_answer}\n\n{closing_step}"
-        client.send_message(chat_id, reply)
-        print(">>> SENT targeted answer to candidate questions.")
+        reply = f"{prefix}{lead_block}{main_answer}\n\n" + " ".join(closing_parts)
+        client.send_message(chat_id, reply.strip())
+        print(">>> SENT targeted answer to candidate questions without duplicate inquiries.")
         sync_candidate_to_b24_deal(chat_id, cand_data_dict)
         return True
 
     # =========================================================================
-    # СЦЕНАРИЙ 6: ПЕРВИЧНЫЙ ОТКЛИК ИЛИ ПРОДОЛЖЕНИЕ ДИАЛОГА
-    # Запрещено задавать одни и те же вопросы дважды!
+    # СЦЕНАРИЙ 7: ПЕРВИЧНЫЙ ОТКЛИК ИЛИ ПРОДОЛЖЕНИЕ ДИАЛОГА
     # =========================================================================
-    if already_greeted:
-        # Диалог УЖЕ идет, но кандидат написал что-то нейтральное
-        if phone_known:
-            reply = (
-                f"{prefix}Ваши данные записаны! Координатор свяжется с вами в ближайшее время. "
-                f"Если остались вопросы по объекту — напишите, с удовольствием подскажу!"
-            )
+    if not already_verified_profile:
+        # Первое настоящее сообщение кандидату (актуализация анкеты)
+        closing_q = " ".join(needed_questions) if needed_questions else "Координатор свяжется с вами для согласования выхода!"
+        if already_greeted:
+            reply = f"{prefix}{verification_block}\n{closing_q}"
         else:
             reply = (
-                f"{prefix}Чтобы закрепить за вами смену и передать информацию координатору, "
-                f"напишите, пожалуйста, ваш номер телефона для связи."
+                f"{prefix}Вакансия актуальна, как раз ведем запись на смены.\n"
+                f"{verification_block}\n"
+                f"{closing_q}"
             )
-        client.send_message(chat_id, reply)
-        print(">>> SENT dialog continuation reply without repeating questions.")
+
+        client.send_message(chat_id, reply.strip())
+        print(">>> SENT initial verification response.")
+        
+        send_b24_notification(
+            title=f"Отклик взят в работу: {first_name or cand_name}",
+            text=f"Вакансия: {item_title}",
+            chat_id=chat_id,
+            phone=known_phone
+        )
         sync_candidate_to_b24_deal(chat_id, cand_data_dict)
         return True
 
-    # ПЕРВИЧНЫЙ ОТКЛИК (Новый кандидат, пишем впервые)
-    profile_parts = []
-    if known_age: profile_parts.append(format_age(known_age))
-    if known_cit: profile_parts.append(f"гражданство {known_cit}")
+    # Если анкета УЖЕ была актуализирована ранее в диалоге:
+    if needed_questions:
+        reply = f"{prefix}" + " ".join(needed_questions)
+    elif phone_known:
+        reply = (
+            f"{prefix}Ваши данные записаны! Координатор свяжется с вами в ближайшее время по номеру {known_phone}. "
+            f"Если остались вопросы по объекту — напишите, с удовольствием подскажу!"
+        )
+    else:
+        reply = (
+            f"{prefix}Чтобы закрепить за вами смену и передать информацию координатору, "
+            f"напишите, пожалуйста, ваш номер телефона для связи."
+        )
 
-    status_line = f"Вижу вашу анкету ({', '.join(profile_parts)}).\n" if profile_parts else ""
-
-    questions = []
-    if not district_known:
-        questions.append("В каком районе вы проживаете?")
-    if not ready_date_known:
-        questions.append("С какого числа готовы выйти на смену?")
-    if not phone_known:
-        questions.append("И напишите номер телефона для связи с координатором.")
-
-    reply = (
-        f"{prefix}Вакансия актуальна, как раз ведем запись на смены.\n"
-        f"{status_line}"
-        + " ".join(questions)
-    )
-
-    client.send_message(chat_id, reply)
-    print(">>> SENT initial response to new candidate.")
-    
-    send_b24_notification(
-        title=f"Новый отклик взят в работу: {first_name or cand_name}",
-        text=f"Вакансия: {item_title}",
-        chat_id=chat_id,
-        phone=known_phone
-    )
+    client.send_message(chat_id, reply.strip())
+    print(">>> SENT dialog continuation reply without repeating questions.")
     sync_candidate_to_b24_deal(chat_id, cand_data_dict)
     return True
 
