@@ -36,11 +36,22 @@ async def poll_avito_chats_loop():
     while True:
         try:
             print(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] Проверка новых сообщений на Авито...")
-            unread_chats = avito_client.get_unread_chats(limit=30)
-            if unread_chats:
-                print(f"Найдено непрочитанных чатов: {len(unread_chats)}")
+            unread_chats = avito_client.get_unread_chats(limit=40)
+            recent_chats = avito_client.get_recent_chats(limit=40)
+
+            # Объединяем чаты без дубликатов, чтобы не пропускать сообщения, открытые в браузере
+            seen_ids = set()
+            all_chats_to_check = []
+            for c in (unread_chats + recent_chats):
+                cid = c.get('id')
+                if cid and cid not in seen_ids:
+                    seen_ids.add(cid)
+                    all_chats_to_check.append(c)
+
+            if all_chats_to_check:
+                print(f"Всего чатов на проверку: {len(all_chats_to_check)} (непрочитанных: {len(unread_chats)})")
                 answered = 0
-                for c in unread_chats:
+                for c in all_chats_to_check:
                     try:
                         if process_single_chat(c):
                             answered += 1

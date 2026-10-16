@@ -65,3 +65,14 @@ class AvitoClient:
         with urllib.request.urlopen(req, context=ctx) as resp:
             res = json.loads(resp.read().decode("utf-8"))
             return res.get("chats", [])
+
+    def get_recent_chats(self, limit: int = 50) -> list:
+        token = self.get_token()
+        url = f"https://api.avito.ru/messenger/v2/accounts/{self.user_id}/chats?limit={limit}"
+        req = urllib.request.Request(url, headers={
+            "Authorization": f"Bearer {token}"
+        })
+        with urllib.request.urlopen(req, context=ctx) as resp:
+            res = json.loads(resp.read().decode("utf-8"))
+            return res.get("chats", [])
+
