@@ -98,6 +98,19 @@ def process_single_chat(chat_summary):
         return False
 
     msgs = list(reversed(raw_msgs))
+    
+    # 0. СТРОГАЯ ПРОВЕРКА ИСТОРИИ НА ПРИОСТАНОВКУ / ОТКАЗ / НЕАКТУАЛЬНОСТЬ
+    all_chat_texts = " ".join([str(m.get('content', {}).get('text', '')).lower() for m in msgs])
+    stop_words = [
+        "приостанов", "набор закрыт", "вакансия закрыта", "вакансия неактуальн",
+        "не готовы предложить", "вынуждены отказать", "не подходите", "не подходит",
+        "больше не пишите", "уже устроился", "уже нашел", "уже нашла", "не актуально",
+        "неактуально", "не беспокойте", "отменили"
+    ]
+    if any(sw in all_chat_texts for sw in stop_words):
+        print(f"Skipping chat {chat_id} ({cand_name}): найдено сообщение о приостановке/отказе в истории переписки!")
+        return False
+
     last_msg = msgs[-1]
     
     # If the last message was sent by US, nothing to reply to right now
