@@ -24,7 +24,7 @@ def health_check():
         "status": "online",
         "service": "Avito AI Recruiter & B24 Enhancer",
         "uptime": "24/7 active",
-        "version": "1.5.0"
+        "version": "1.6.0"
     }
 
 async def poll_avito_chats_loop():
