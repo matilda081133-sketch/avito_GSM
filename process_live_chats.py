@@ -156,6 +156,26 @@ def get_cabinet_uis_phone(item_id: str = "", item_title: str = "") -> str:
     else:
         return "+7 (958) 565-19-78"
 
+def sanitize_bot_reply(reply: str, already_greeted: bool, first_name: str) -> str:
+    cleaned = reply.strip()
+    if already_greeted:
+        # 1. Вырезаем любые приветствия ("Здравствуйте", "Здравствуйте, Ильмира!" и т.д.)
+        cleaned = re.sub(r'^(?:(?:Здравствуйте|Добрый день|Добрый вечер|Доброе утро|Приветствую|Привет)[^!?,.\n]*[!?,.\n]*\s*)+', '', cleaned, flags=re.IGNORECASE).strip()
+        # 2. Вырезаем шаблонную фразу о начале диалога
+        cleaned = re.sub(r'Вакансия актуальна,\s*как раз ведем запись на смены\.?\s*', '', cleaned, flags=re.IGNORECASE).strip()
+        # 3. Вырезаем блок верификации анкеты, если диалог уже идет
+        cleaned = re.sub(r'Вижу вашу анкету\s*\([^)]*\)\s*—?\s*(?:данные актуальны\??|всё отлично подходит\.?)\s*', '', cleaned, flags=re.IGNORECASE).strip()
+        cleaned = re.sub(r'По вашей анкете\s*\([^)]*\)\s*всё отлично подходит\.?\s*', '', cleaned, flags=re.IGNORECASE).strip()
+        if first_name and cleaned.startswith(first_name):
+            cleaned = re.sub(rf'^{first_name}[!?,.]*\s*', '', cleaned, flags=re.IGNORECASE).strip()
+        if first_name:
+            cleaned = f"{first_name}, {cleaned}"
+    return cleaned
+
+def safe_send_message(chat_id: str, reply: str, already_greeted: bool, first_name: str):
+    cleaned = sanitize_bot_reply(reply, already_greeted, first_name)
+    client.send_message(chat_id, cleaned)
+
 def process_single_chat(chat_summary):
     chat_id = chat_summary.get('id')
     users = chat_summary.get('users', [])
@@ -303,9 +323,12 @@ def process_single_chat(chat_summary):
     already_asked_phone = ("номер телефона" in all_our_text or "номер для связи" in all_our_text or "контактный номер" in all_our_text)
 
     # 6. Актуализировали ли мы уже анкету
-    already_verified_profile = any(
+    any_our_msg = any(m.get('author_id') == AVITO_USER_ID for m in msgs)
+    already_greeted = (our_last_idx != -1) or any_our_msg or (len(msgs) > len(new_candidate_msgs))
+    already_verified_profile = already_greeted or any(
         phrase in all_our_text for phrase in [
-            "данные актуальны", "вижу вашу анкету", "вижу анкету", "анкета актуальна"
+            "данные актуальны", "вижу вашу анкету", "вижу анкету", "анкета актуальна",
+            "по вашей анкете", "отлично подходит"
         ]
     )
 
@@ -313,7 +336,6 @@ def process_single_chat(chat_summary):
     # ПРАВИЛО 4: СТРОЖАЙШИЙ ЗАПРЕТ НА ПОВТОРНЫЕ ПРИВЕТСТВИЯ В ОДИН ДЕНЬ
     # Если мы уже хоть раз отправляли сообщение кандидату -> НИКАКИХ "Здравствуйте"!
     # =========================================================================
-    already_greeted = (our_last_idx != -1)
     if already_greeted:
         prefix = f"{first_name}, " if first_name else ""
     else:
@@ -353,7 +375,7 @@ def process_single_chat(chat_summary):
             f"{prefix}К сожалению, по требованиям охраны труда на объектах трудоустройство строго с 18 лет. "
             f"Будем рады сотрудничеству по достижении совершеннолетия!"
         )
-        client.send_message(chat_id, reply)
+        safe_send_message(chat_id, reply, already_greeted, first_name)
         print(">>> SENT underage polite refusal.")
         sync_candidate_to_b24_deal(chat_id, cand_data_dict)
         return True
@@ -372,8 +394,55 @@ def process_single_chat(chat_summary):
                 f"{prefix}Прошу прощения за накладку! Чтобы координатор мог набрать вас и закрепить смену, "
                 f"напишите, пожалуйста, ваш контактный номер телефона."
             )
-        client.send_message(chat_id, reply)
+        safe_send_message(chat_id, reply, already_greeted, first_name)
         print(">>> SENT candidate already answered acknowledgment.")
+        sync_candidate_to_b24_deal(chat_id, cand_data_dict)
+        return True
+
+    # =========================================================================
+    # СЦЕНАРИЙ 2b: КАНДИДАТ ТРЕБУЕТ ОТВЕТОВ НА ВСЕ ВОПРОСЫ («Ответьте на все вопросы...»)
+    # =========================================================================
+    demands_answers = any(phrase in t_new_lower for phrase in [
+        "ответьте на все вопросы", "ответьте на вопросы", "ответьте на вопрос",
+        "вы не ответили", "почему не отвечаете", "ответьте мне", "жду ответ",
+        "я же спросил", "я же написала", "я же спросила"
+    ])
+    if demands_answers:
+        complaint_answers = []
+        full_cand_history = all_cand_text.lower()
+        vac_lower_c = item_title.lower()
+        
+        if any(w in full_cand_history for w in ["уборщ", "клининг", "обязанност", "что делать", "в чем суть"]):
+            if any(w in vac_lower_c for w in ["уборщ", "клининг"]):
+                complaint_answers.append("• По обязанностям: уборка складских и служебных помещений, инвентарь и форма выдаются бесплатно.")
+            else:
+                complaint_answers.append(f"• По обязанностям: комплектовка и упаковка товаров на теплом складе («{item_title}»), это не уборка.")
+        
+        if any(w in full_cand_history for w in ["график", "смен", "время", "со скольк", "во скольк", "не успеваю", "к 8"]):
+            complaint_answers.append("• По графику: дневные смены с 08:00 до 20:00, ночные — с 20:00 до 08:00. Если к 08:00 не успеваете, время выхода согласуется индивидуально с координатором.")
+        
+        if any(w in full_cand_history for w in ["карту", "третьего лица", "чужую"]):
+            complaint_answers.append("• По выплатам: перечисление на карту другого лица возможно по заявлению.")
+            
+        if any(w in full_cand_history for w in ["скольк", "ставк", "оплат", "зарплат"]):
+            rate_str = vac_prof.get("rate", "от 3 600 до 4 200 ₽ за смену")
+            complaint_answers.append(f"• По оплате: ставка составляет {rate_str}, выплаты без задержек.")
+            
+        if any(w in full_cand_history for w in ["где", "адрес", "добира"]):
+            complaint_answers.append(f"• По адресу: объект «{item_title}», подробный маршрут подскажет координатор.")
+
+        if not complaint_answers:
+            complaint_answers.append("Прошу прощения за задержку с ответом! Обязательно отвечу на все интересующие вопросы.")
+
+        closing = f"Координатор свяжется с вами по номеру {known_phone} и согласует все детали!" if phone_known else "Подскажите номер телефона для связи — координатор наберет вас и подробно ответит на все нюансы."
+        
+        reply = (
+            f"{prefix}Прошу прощения за ожидание! Отвечаю на ваши вопросы:\n\n"
+            + "\n".join(complaint_answers) + "\n\n"
+            + closing
+        )
+        safe_send_message(chat_id, reply, already_greeted, first_name)
+        print(">>> SENT comprehensive response to candidate complaint/demands.")
         sync_candidate_to_b24_deal(chat_id, cand_data_dict)
         return True
 
@@ -393,7 +462,7 @@ def process_single_chat(chat_summary):
                 f"{prefix}Номер телефона из объявления: {uis_phone} (звонок бесплатный). "
                 f"Либо оставьте ваш контактный номер телефона, и координатор наберет вас сам в ближайшее время!"
             )
-        client.send_message(chat_id, reply)
+        safe_send_message(chat_id, reply, already_greeted, first_name)
         print(f">>> SENT official cabinet UIS tracking phone {uis_phone} from ad.")
         sync_candidate_to_b24_deal(chat_id, cand_data_dict)
         return True
@@ -429,7 +498,7 @@ def process_single_chat(chat_summary):
             needed_questions.append(f"Координатор свяжется с вами по номеру {known_phone} для согласования записи!")
 
         reply = f"{prefix}Отлично! " + " ".join(needed_questions)
-        client.send_message(chat_id, reply)
+        safe_send_message(chat_id, reply, already_greeted, first_name)
         print(">>> SENT profile confirmation acknowledgment + next missing questions.")
         sync_candidate_to_b24_deal(chat_id, cand_data_dict)
         return True
@@ -566,7 +635,12 @@ def process_single_chat(chat_summary):
         answered_intent = True
         answer_parts.append("Для сотрудников предоставляется бесплатное комфортное проживание (общежитие со всеми удобствами) и оборудованная комната приема пищи.")
 
-    # 5.14. УНИВЕРСАЛЬНЫЙ ПЕРЕХВАТ ЛЮБЫХ НЕОТВЕЧЕННЫХ ВОПРОСОВ (CATCH-ALL)
+    # 5.14. Вопрос «Вы бот?» / «Это робот?» / «Позовите человека»
+    if any(w in t_new_lower for w in ["вы бот", "это бот", "вы робот", "это робот", "живой человек", "с кем я общаюсь", "позовите человека", "оператор", "переведите на оператора"]):
+        answered_intent = True
+        answer_parts.append("Я специалист по первичному оформлению на смены. Чтобы живой координатор с объекта набрал вас и ответил на все детальные вопросы, мы сейчас согласуем запись.")
+
+    # 5.15. УНИВЕРСАЛЬНЫЙ ПЕРЕХВАТ ЛЮБЫХ НЕОТВЕЧЕННЫХ ВОПРОСОВ (CATCH-ALL)
     # Гарантирует, что ни один вопрос кандидата не останется без ответа!
     is_candidate_question = (
         "?" in new_text or any(w in t_new_lower for w in [
@@ -603,7 +677,7 @@ def process_single_chat(chat_summary):
         else:
             reply = f"{prefix}{lead_block}Спасибо, номер {new_phone} зафиксировала! Координатор свяжется с вами для записи и ответит на все вопросы."
         
-        client.send_message(chat_id, reply)
+        safe_send_message(chat_id, reply, already_greeted, first_name)
         print(">>> SENT phone acknowledgment + answers.")
         
         send_b24_notification(
@@ -633,7 +707,7 @@ def process_single_chat(chat_summary):
             closing_parts.append(f"Координатор наберет вас по номеру {known_phone} и согласует запись на смену!")
 
         reply = f"{prefix}{main_answer}\n\n" + " ".join(closing_parts)
-        client.send_message(chat_id, reply.strip())
+        safe_send_message(chat_id, reply.strip(), already_greeted, first_name)
         print(">>> SENT targeted answer to candidate questions without duplicate inquiries.")
         sync_candidate_to_b24_deal(chat_id, cand_data_dict)
         return True
@@ -643,16 +717,12 @@ def process_single_chat(chat_summary):
     # =========================================================================
     if not already_verified_profile:
         closing_q = " ".join(needed_questions) if needed_questions else (f"Координатор свяжется с вами по номеру {known_phone} для согласования записи!" if phone_known else "Координатор свяжется с вами для согласования выхода!")
-        if already_greeted:
-            reply = f"{prefix}{verification_block}\n{closing_q}"
-        else:
-            reply = (
-                f"{prefix}Вакансия актуальна, как раз ведем запись на смены.\n"
-                f"{verification_block}\n"
-                f"{closing_q}"
-            )
-
-        client.send_message(chat_id, reply.strip())
+        reply = (
+            f"{prefix}Вакансия актуальна, как раз ведем запись на смены.\n"
+            f"{verification_block}\n"
+            f"{closing_q}"
+        )
+        safe_send_message(chat_id, reply.strip(), already_greeted, first_name)
         print(">>> SENT initial verification response.")
         
         send_b24_notification(
@@ -678,7 +748,7 @@ def process_single_chat(chat_summary):
             f"напишите, пожалуйста, ваш номер телефона для связи."
         )
 
-    client.send_message(chat_id, reply.strip())
+    safe_send_message(chat_id, reply.strip(), already_greeted, first_name)
     print(">>> SENT dialog continuation reply without repeating questions.")
     sync_candidate_to_b24_deal(chat_id, cand_data_dict)
     return True
