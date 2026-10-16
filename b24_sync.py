@@ -121,6 +121,90 @@ def parse_and_enhance_deal(deal: dict) -> dict:
     res = call_b24("crm.deal.update", {"id": did, "fields": upd_fields})
     return {"id": did, "title": new_title, "success": res.get("result", False)}
 
+def get_or_reveal_candidate_phone(chat_id: str, client=None, context: dict = None) -> tuple:
+    """
+    Автоматически находит или раскрывает номер телефона кандидата («Показать телефон»):
+    1. Проверяет контекст чата на прикрепленное резюме Авито (GET /job/v1/resumes/{id}/contacts/).
+    2. Ищет сделку и контакт в Битрикс24 по ID чата.
+    3. Проверяет комментарии сделки (wa.me, [Телефон:], ID резюме).
+    4. Если телефон раскрыт через Авито API, но отсутствует в CRM — сразу заносит его в Битрикс24!
+    Возвращает (phone, source).
+    """
+    token = None
+    if client:
+        try:
+            token = client.get_token()
+        except Exception:
+            token = None
+
+    # 1. Проверка контекста чата на резюме (имитация кнопки "Показать телефон" на Авито)
+    if context and context.get('type') == 'item':
+        val = context.get('value', {})
+        url = val.get('url', '')
+        item_id = val.get('id')
+        if item_id and token and ('/rezume/' in url or 'резюме' in val.get('title', '').lower()):
+            try:
+                r_url = f'https://api.avito.ru/job/v1/resumes/{item_id}/contacts/'
+                req = urllib.request.Request(r_url, headers={'Authorization': f'Bearer {token}'})
+                with urllib.request.urlopen(req, context=ctx) as resp:
+                    cdata = json.loads(resp.read().decode('utf-8'))
+                    for ct in cdata.get('contacts', []):
+                        if ct.get('type') == 'phone' and ct.get('value'):
+                            raw_p = re.sub(r'[^\d+]', '', str(ct.get('value')))
+                            p = '+7' + raw_p[-10:] if len(raw_p) >= 10 else raw_p
+                            return p, 'Avito Resume API (Показать телефон)'
+            except Exception:
+                pass
+
+    # 2. Поиск сделки в Битрикс24
+    res = call_b24('crm.deal.list', {
+        'filter': {'%UF_CRM_1770280572875': chat_id},
+        'select': ['ID', 'TITLE', 'CONTACT_ID', 'COMMENTS', 'UF_CRM_1775470003043']
+    })
+    deals = res.get('result', [])
+    if not deals:
+        res = call_b24('crm.deal.list', {
+            'filter': {'%COMMENTS': chat_id},
+            'select': ['ID', 'TITLE', 'CONTACT_ID', 'COMMENTS', 'UF_CRM_1775470003043']
+        })
+        deals = res.get('result', [])
+
+    if deals:
+        deal = deals[0]
+        cid = deal.get('CONTACT_ID')
+        if cid:
+            c = call_b24('crm.contact.get', {'id': cid}).get('result', {})
+            phones = c.get('PHONE', [])
+            if phones and phones[0].get('VALUE'):
+                return phones[0].get('VALUE'), 'B24 Contact'
+
+        comments = deal.get('COMMENTS', '')
+        m_ph = re.search(r'\[Телефон:\]\s*([^\n\r\[]+)', comments)
+        if m_ph and len(m_ph.group(1).strip()) >= 10:
+            return m_ph.group(1).strip(), 'B24 Deal Comment'
+
+        m_wa = re.search(r'wa\.me/\+?(\d{11})', comments)
+        if m_wa:
+            return '+' + m_wa.group(1), 'B24 WA Link'
+
+        m_res = re.search(r'(?:резюме|resume)[^\d]*(\d{8,12})', comments, re.IGNORECASE)
+        if m_res and token:
+            r_id = m_res.group(1)
+            try:
+                r_url = f'https://api.avito.ru/job/v1/resumes/{r_id}/contacts/'
+                req = urllib.request.Request(r_url, headers={'Authorization': f'Bearer {token}'})
+                with urllib.request.urlopen(req, context=ctx) as resp:
+                    cdata = json.loads(resp.read().decode('utf-8'))
+                    for ct in cdata.get('contacts', []):
+                        if ct.get('type') == 'phone' and ct.get('value'):
+                            raw_p = re.sub(r'[^\d+]', '', str(ct.get('value')))
+                            p = '+7' + raw_p[-10:] if len(raw_p) >= 10 else raw_p
+                            return p, 'Avito Job API from B24 Comment'
+            except Exception:
+                pass
+
+    return None, None
+
 def sync_candidate_to_b24_deal(chat_id: str, cand_data: dict) -> bool:
     """
     Синхронизирует все полученные из чата данные в соответствующие поля сделки в Битрикс24:
@@ -153,16 +237,39 @@ def sync_candidate_to_b24_deal(chat_id: str, cand_data: dict) -> bool:
             deal_id = current_deal.get('ID')
             contact_id = current_deal.get('CONTACT_ID')
 
-        if not deal_id:
-            print(f"[B24 SYNC] Сделка для чата {chat_id} пока не найдена в Битрикс24.")
-            return False
-
-        upd_fields = {}
         name = cand_data.get('name')
         age = cand_data.get('age')
         phone = cand_data.get('phone')
-        vacancy = cand_data.get('vacancy') or current_deal.get('UF_CRM_1775470003043')
+        vacancy = cand_data.get('vacancy') or (current_deal.get('UF_CRM_1775470003043') if current_deal else '')
 
+        if not deal_id:
+            # Если сделка еще не создана Wappi — создаем сделку и контакт напрямую в Битрикс24
+            is_vahta = "вахт" in (vacancy or "").lower()
+            deal_fields = {
+                'TITLE': f"[{vacancy or 'Авито'}] {name or 'Кандидат'}" + (f" | {phone}" if phone else ""),
+                'STAGE_ID': ('UC_G0AG7S' if is_vahta else 'PREPARATION') if phone else 'NEW',
+                'UF_CRM_1770280572875': f"https://www.avito.ru/profile/messenger/channel/{chat_id}",
+                'UF_CRM_1775470003043': vacancy or '',
+                'UF_CRM_1768816011673': name or '',
+                'UF_CRM_1768816356722': str(age) if age else ''
+            }
+            if phone:
+                c_res = call_b24('crm.contact.add', {
+                    'fields': {
+                        'NAME': name or 'Кандидат',
+                        'PHONE': [{'VALUE': phone, 'VALUE_TYPE': 'WORK'}]
+                    }
+                })
+                contact_id = c_res.get('result')
+                if contact_id:
+                    deal_fields['CONTACT_ID'] = contact_id
+            
+            d_res = call_b24('crm.deal.add', {'fields': deal_fields})
+            deal_id = d_res.get('result')
+            print(f"[B24 SYNC] Создана новая сделка #{deal_id} для чата {chat_id}")
+            current_deal = deal_fields
+
+        upd_fields = {}
         if name and not current_deal.get('UF_CRM_1768816011673'):
             upd_fields['UF_CRM_1768816011673'] = name
         if age and (not current_deal.get('UF_CRM_1768816356722') or current_deal.get('UF_CRM_1768816356722') == '0'):
