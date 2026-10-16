@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 import urllib.request, json, ssl, time, sys, re
 from avito_api import AvitoClient
-from ai_engine import AIRecruiterEngine, extract_phone, get_uis_phone_for_vacancy
+from ai_engine import AIRecruiterEngine, extract_phone
 from vacancy_rules import detect_vacancy_profile, evaluate_candidate_fit
 from b24_sync import sync_candidate_to_b24_deal, get_or_reveal_candidate_phone
 from config import AVITO_CLIENT_ID, AVITO_CLIENT_SECRET, AVITO_USER_ID, B24_WEBHOOK_URL
@@ -352,13 +352,18 @@ def process_single_chat(chat_summary):
     # СЦЕНАРИЙ 3: КАНДИДАТ СПРАШИВАЕТ «КАК СВЯЗАТЬСЯ / ПРЯМОЙ НОМЕР»
     # =========================================================================
     if t_new_lower and any(w in t_new_lower for w in ["как связа", "позвон", "прямой номер", "какой номер", "номер для связи"]):
-        direct_phone = get_uis_phone_for_vacancy(item_title)
-        reply = (
-            f"{prefix}Прямой номер координатора объекта: {direct_phone} (звонок бесплатный). "
-            f"Либо оставьте ваш номер телефона, и координатор наберет вас сам."
-        )
+        if phone_known:
+            reply = (
+                f"{prefix}Координатор объекта сам оперативно свяжется с вами по указанному номеру {known_phone}, "
+                f"ответит на все вопросы и согласует запись на смену!"
+            )
+        else:
+            reply = (
+                f"{prefix}Координаторы объектов сами связываются с кандидатами для согласования деталей и записи. "
+                f"Напишите ваш контактный номер телефона, и координатор наберет вас в ближайшее время!"
+            )
         client.send_message(chat_id, reply)
-        print(">>> SENT direct UIS contact number.")
+        print(">>> SENT coordinator callback process explanation.")
         sync_candidate_to_b24_deal(chat_id, cand_data_dict)
         return True
 

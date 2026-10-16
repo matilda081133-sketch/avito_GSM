@@ -152,29 +152,22 @@ class AIRecruiterEngine:
         session.history.append({"role": "assistant", "content": reply})
         return reply
 
-from config import UIS_PHONES
-
-def get_uis_phone_for_vacancy(vacancy_name: str) -> str:
-    v = (vacancy_name or "").lower()
-    if "смарт" in v or "балаших" in v or "зоо" in v:
-        return UIS_PHONES["SMART_BALASHIKHA"]
-    elif "вахт" in v or "аби" in v or "тепофол" in v or "арник" in v:
-        return UIS_PHONES["VAHTA"]
-    else:
-        return UIS_PHONES["DAILY_REGIONAL"]
-
     def generate_intelligent_reply(self, session: CandidateSession, user_text: str) -> str:
         t = user_text.lower()
         vac = session.detected_vacancy
         
         # Вопрос как связаться / позвонить / телефон
         if any(w in t for w in ["связа", "позвон", "номер", "телефон", "сохран", "контакт"]):
-            direct_phone = get_uis_phone_for_vacancy(vac)
-            return (
-                f"Вы можете позвонить напрямую по номеру {direct_phone} (звонок бесплатный). "
-                f"Это прямой номер координатора объекта!\n\n"
-                f"Либо напишите, в какое время вам удобно принять звонок, и мы вас наберем!"
-            )
+            if session.phone:
+                return (
+                    f"Координатор объекта сам оперативно свяжется с вами по указанному номеру {session.phone}, "
+                    f"ответит на все вопросы и запишет на смену! Напишите, в какое время вам удобнее принять звонок?"
+                )
+            else:
+                return (
+                    "Координаторы объектов сами связываются с кандидатами для согласования деталей и записи на смены. "
+                    "Напишите ваш контактный номер телефона, и координатор наберет вас в ближайшее время!"
+                )
 
         # Вопрос про возраст (старше 45, 50, пенсионеры)
         if any(w in t for w in ["45", "50", "55", "60", "пенсион", "возраст"]):
