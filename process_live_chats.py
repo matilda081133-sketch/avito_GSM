@@ -362,7 +362,8 @@ def process_single_chat(chat_summary):
         sync_candidate_to_b24_deal(chat_id, cand_data_dict)
         return True
 
-    # Блок верификации анкеты (если еще не верифицировали)
+    # Блок верификации анкеты (партнерский тон, без бюрократических переспросов)
+    cand_stated_profile = bool(re.search(r'\b\d{2}\s*(?:лет|года)?\b', all_cand_text)) or bool(re.search(r'\b(?:рф|росси[яи]|гражданство)\b', all_cand_text.lower()))
     profile_parts = []
     if known_age:
         profile_parts.append(format_age(known_age))
@@ -370,9 +371,12 @@ def process_single_chat(chat_summary):
         profile_parts.append(f"гражданство {known_cit}")
 
     if profile_parts:
-        verification_block = f"Вижу вашу анкету ({', '.join(profile_parts)}) — подскажите, данные актуальны?"
+        if cand_stated_profile:
+            verification_block = f"По вашей анкете ({', '.join(profile_parts)}) всё отлично подходит!"
+        else:
+            verification_block = f"Вижу вашу анкету ({', '.join(profile_parts)}) — всё отлично подходит."
     else:
-        verification_block = "Подскажите ваш возраст и гражданство — данные актуальны?"
+        verification_block = "Уточните, пожалуйста, ваш возраст и гражданство для согласования на объекте."
 
     # =========================================================================
     # СЦЕНАРИЙ 4: КАНДИДАТ ОТВЕТИЛ «ДА / ВСЁ ВЕРНО / АКТУАЛЬНО» НА НАШ ВОПРОС ПО АНКЕТЕ
@@ -584,7 +588,6 @@ def process_single_chat(chat_summary):
 
     # Если мы ответили на конкретные вопросы кандидата
     if answered_intent:
-        lead_block = f"{verification_block}\n" if not already_verified_profile else ""
         main_answer = " ".join(answer_parts)
         
         closing_parts = []
@@ -593,7 +596,7 @@ def process_single_chat(chat_summary):
         elif phone_known:
             closing_parts.append(f"Координатор наберет вас по номеру {known_phone} и согласует запись на смену!")
 
-        reply = f"{prefix}{lead_block}{main_answer}\n\n" + " ".join(closing_parts)
+        reply = f"{prefix}{main_answer}\n\n" + " ".join(closing_parts)
         client.send_message(chat_id, reply.strip())
         print(">>> SENT targeted answer to candidate questions without duplicate inquiries.")
         sync_candidate_to_b24_deal(chat_id, cand_data_dict)
@@ -603,8 +606,7 @@ def process_single_chat(chat_summary):
     # СЦЕНАРИЙ 7: ПЕРВИЧНЫЙ ОТКЛИК ИЛИ ПРОДОЛЖЕНИЕ ДИАЛОГА
     # =========================================================================
     if not already_verified_profile:
-        # Первое настоящее сообщение кандидату (актуализация анкеты)
-        closing_q = " ".join(needed_questions) if needed_questions else "Координатор свяжется с вами для согласования выхода!"
+        closing_q = " ".join(needed_questions) if needed_questions else (f"Координатор свяжется с вами по номеру {known_phone} для согласования записи!" if phone_known else "Координатор свяжется с вами для согласования выхода!")
         if already_greeted:
             reply = f"{prefix}{verification_block}\n{closing_q}"
         else:
