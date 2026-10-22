@@ -1,99 +1,105 @@
 # -*- coding: utf-8 -*-
 """
-AVITO AI RECRUITER & B24 ENHANCER (MAIN ENTRYPOINT)
-Автономный фоновый сервис 24/7
+UNIFIED PRODUCTION CLOUD ENTRYPOINT (RENDER / VPS / DOCKER)
+Запуск единого автономного облачного сервиса 24/7:
+1. FastAPI сервер с Healthcheck (порт 8080 / PORT из env) — удерживает сервис активным на Render.
+2. Фоновый поток 1: Дежурный Авито AI-рекрутер (опрос каждые 15 сек, диалоги, синхронизация с Битрикс24).
+3. Фоновый поток 2: МАКС рекрутер-бот и автопилот групповых чатов объектов с бригадирами.
 """
-from fastapi import FastAPI, Request, BackgroundTasks
-import uvicorn
-import asyncio
-import time
+import sys
 import os
-from config import PORT, HOST, AVITO_CLIENT_ID, AVITO_CLIENT_SECRET, AVITO_USER_ID
-from ai_engine import AIRecruiterEngine
-from b24_sync import call_b24, parse_and_enhance_deal
-from process_live_chats import process_single_chat
-from avito_api import AvitoClient
+import time
+import threading
+import asyncio
+from fastapi import FastAPI
+import uvicorn
 
-app = FastAPI(title="Avito AI Recruiter Bot")
-ai_engine = AIRecruiterEngine()
-avito_client = AvitoClient(AVITO_CLIENT_ID, AVITO_CLIENT_SECRET, AVITO_USER_ID)
+# UTF-8 encoding support
+if sys.stdout is not None:
+    try:
+        sys.stdout.reconfigure(encoding='utf-8', line_buffering=True)
+    except Exception:
+        pass
+if sys.stderr is not None:
+    try:
+        sys.stderr.reconfigure(encoding='utf-8', line_buffering=True)
+    except Exception:
+        pass
+
+from config import PORT, HOST, AVITO_CLIENT_ID, AVITO_CLIENT_SECRET, AVITO_USER_ID
+from avito_api import AvitoClient
+from process_live_chats import process_single_chat
+import max_recruiter_bot
+
+app = FastAPI(title="HR Cloud Autonomous Recruiter Service", version="2.0.0")
 
 @app.get("/")
-def health_check():
+@app.get("/health")
+@app.get("/healthz")
+def healthcheck():
     return {
         "status": "online",
-        "service": "Avito AI Recruiter & B24 Enhancer",
-        "uptime": "24/7 active",
-        "version": "1.6.1"
+        "service": "Avito + MAX Cloud AI Recruiter 24/7",
+        "version": "2.0.0",
+        "avito_active": True,
+        "max_active": True,
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
     }
 
-async def poll_avito_chats_loop():
-    """
-    Фоновый диспетчер: каждые 2 минуты (120 секунд) проверяет входящие сообщения
-    в чатах Авито и автоматически отвечает кандидатам.
-    """
-    print("[AVITO POLLER] Фоновый мониторинг чатов Авито запущен (интервал: 2 минуты).")
+def run_avito_poller_thread():
+    """Фоновый поток дежурного рекрутера Авито (опрос каждые 15 сек)."""
+    print("[CLOUD AVITO] Дежурный рекрутер Авито запущен в облаке (интервал: 15с).", flush=True)
+    client = AvitoClient(AVITO_CLIENT_ID, AVITO_CLIENT_SECRET, AVITO_USER_ID)
     while True:
         try:
-            print(f"\n[{time.strftime('%Y-%m-%d %H:%M:%S')}] Проверка новых сообщений на Авито...")
-            unread_chats = avito_client.get_unread_chats(limit=40)
-            recent_chats = avito_client.get_recent_chats(limit=40)
+            unread = client.get_unread_chats(limit=50)
+            recent = client.get_recent_chats(limit=30)
 
-            # Объединяем чаты без дубликатов, чтобы не пропускать сообщения, открытые в браузере
-            seen_ids = set()
-            all_chats_to_check = []
-            for c in (unread_chats + recent_chats):
+            seen = set()
+            all_chats = []
+            for c in (unread + recent):
                 cid = c.get('id')
-                if cid and cid not in seen_ids:
-                    seen_ids.add(cid)
-                    all_chats_to_check.append(c)
+                if cid and cid not in seen:
+                    seen.add(cid)
+                    all_chats.append(c)
 
-            if all_chats_to_check:
-                print(f"Всего чатов на проверку: {len(all_chats_to_check)} (непрочитанных: {len(unread_chats)})")
-                answered = 0
-                for c in all_chats_to_check:
+            if all_chats:
+                sent = 0
+                for c in all_chats:
                     try:
                         if process_single_chat(c):
-                            answered += 1
-                            await asyncio.sleep(2)
-                    except Exception as e_chat:
-                        print(f"Ошибка обработки чата: {e_chat}")
-                if answered > 0:
-                    print(f"Успешно отправлено ответов в этом цикле: {answered}")
-            else:
-                print("Новых сообщений нет, все чаты обработаны.")
+                            sent += 1
+                            time.sleep(1.0)
+                    except Exception as e_c:
+                        print(f"[CLOUD AVITO CHAT ERROR] {e_c}", flush=True)
+                if sent > 0:
+                    print(f"[CLOUD AVITO] Отправлено ответов кандидатам: {sent}", flush=True)
+            time.sleep(15)
         except Exception as e:
-            print(f"[AVITO POLLER ERROR] {e}")
+            print(f"[CLOUD AVITO POLLER ERROR] {e}", flush=True)
+            time.sleep(10)
 
-        # Пауза 2 минуты перед следующей проверкой
-        await asyncio.sleep(120)
-
-async def poll_and_enhance_deals():
-    """
-    Фоновый диспетчер CRM: каждые 30 секунд проверяет новые сделки из Авито
-    и переименовывает их в [Объект] Имя | Телефон | Возраст (Пол)
-    """
-    while True:
-        try:
-            res = call_b24("crm.deal.list", {
-                "order": {"ID": "DESC"},
-                "filter": {"CATEGORY_ID": 0, "%TITLE": "Avito Wappi"},
-                "select": ["ID", "TITLE", "COMMENTS", "UF_CRM_1775470003043", "UF_CRM_1768816011673", "UF_CRM_1768816356722"],
-                "limit": 10
-            })
-            deals = res.get("result", [])
-            for d in deals:
-                parse_and_enhance_deal(d)
-        except Exception as e:
-            print(f"[CRM POLLER ERROR] {e}")
-        await asyncio.sleep(30)
+def run_max_bot_thread():
+    """Фоновый поток бота МАКС и групповых чатов объектов."""
+    print("[CLOUD MAX] Сервис МАКС-бота запущен в облаке.", flush=True)
+    try:
+        max_recruiter_bot.run_max_bot_loop()
+    except Exception as e:
+        print(f"[CLOUD MAX ERROR] {e}", flush=True)
 
 @app.on_event("startup")
-async def startup_event():
-    # Запускаем фоновые циклы
-    asyncio.create_task(poll_avito_chats_loop())
-    asyncio.create_task(poll_and_enhance_deals())
-    print("[STARTUP] Все фоновые службы (Avito + CRM) успешно стартовали.")
+def startup_event():
+    # Запуск Авито в отдельном фоновом потоке
+    t_avito = threading.Thread(target=run_avito_poller_thread, daemon=True, name="AvitoPollerThread")
+    t_avito.start()
+
+    # Запуск МАКС в отдельном фоновом потоке
+    t_max = threading.Thread(target=run_max_bot_thread, daemon=True, name="MaxBotThread")
+    t_max.start()
+    print("🚀 [STARTUP] Все автономные службы (Авито + МАКС + CRM) успешно стартовали в облачном режиме!", flush=True)
 
 if __name__ == "__main__":
-    uvicorn.run("main:app", host=HOST, port=PORT, reload=False)
+    port = int(os.environ.get("PORT", PORT if PORT else 8080))
+    host = os.environ.get("HOST", "0.0.0.0")
+    print(f"🌍 Запуск HTTP Healthcheck сервера на {host}:{port}...", flush=True)
+    uvicorn.run("main:app", host=host, port=port, reload=False)

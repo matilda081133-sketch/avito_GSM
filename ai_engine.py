@@ -72,8 +72,10 @@ class AIRecruiterEngine:
             session.phone = extracted_phone
             session.state = "PHONE_OBTAINED"
             reply = (
-                "Спасибо, контакты зафиксировала! Координатор свяжется с вами для согласования всех деталей и даты выхода. "
-                "Если появятся вопросы — пишите прямо сюда в чат, мы на связи!"
+                f"Спасибо, контакт {session.phone} зафиксирован!\n\n"
+                "Для записи на смену и передачи информации бригадиру (менеджеру объекта) перейдите, пожалуйста, в наш чат в MAX:\n"
+                "👉 https://max.ru/id9729371578_bot\n\n"
+                "Нажмите там «Начать» или напишите любое сообщение — там оформим пропуск на объект и согласуем дату заселения/выхода!"
             )
             session.history.append({"role": "user", "content": user_text})
             session.history.append({"role": "assistant", "content": reply})
@@ -83,12 +85,8 @@ class AIRecruiterEngine:
         if len(session.history) == 0:
             session.history.append({"role": "user", "content": user_text})
             
-            # Проверка анкеты Авито
-            m_fio = re.search(r'ФИО\s*[—\-:]\s*([^\n\r]+)', user_text, re.IGNORECASE)
-            m_age = re.search(r'Возраст\s*[—\-:]\s*(\d+)', user_text, re.IGNORECASE)
-            m_cit = re.search(r'Гражданство\s*[—\-:]\s*([^\n\r]+)', user_text, re.IGNORECASE)
-
             cand_name = ""
+            m_fio = re.search(r'ФИО\s*[—\-:]\s*([^\n\r]+)', user_text, re.IGNORECASE)
             if m_fio:
                 parts = m_fio.group(1).strip().split()
                 if len(parts) >= 2:
@@ -98,50 +96,24 @@ class AIRecruiterEngine:
             elif candidate_name:
                 cand_name = candidate_name.split()[0].capitalize()
 
-            age_val = m_age.group(1).strip() if m_age else ""
-            cit_val = m_cit.group(1).strip() if m_cit else ""
-
-            greeting = f"Здравствуйте, {cand_name}!" if cand_name else "Здравствуйте!"
+            greeting = f"Здравствуйте, {cand_name}!\n" if cand_name else "Здравствуйте!\n"
             
-            if age_val or cit_val:
-                profile_summary = []
-                if age_val: profile_summary.append(f"{age_val} лет")
-                if cit_val: profile_summary.append(f"гражданство {cit_val}")
-                summary_str = ", ".join(profile_summary)
-                
-                if session.is_vahta():
-                    reply = (
-                        f"{greeting} Вакансия актуальна, как раз сейчас распределяем места на заезд.\n\n"
-                        f"Вашу анкету вижу ({summary_str}) — всё верно, данные актуальны?\n\n"
-                        "Подскажите ещё два момента:\n"
-                        "1. Из какого вы города и с какого числа готовы к выезду?\n"
-                        "2. Ваш номер телефона для связи — я наберу, расскажу подробнее по заселению, питанию и забронирую место"
-                    )
-                else:
-                    reply = (
-                        f"{greeting} Вакансия актуальна, как раз сейчас формируем списки на ближайшие смены.\n\n"
-                        f"Вашу анкету вижу ({summary_str}) — всё верно, данные актуальны?\n\n"
-                        "Подскажите ещё два момента:\n"
-                        "1. В каком районе вы проживаете и когда готовы выйти на смену (можно уже завтра)?\n"
-                        "2. Ваш номер телефона для связи — я быстро наберу, сориентирую по остановке нашего автобуса и запишу на смену"
-                    )
-            else:
-                if session.is_vahta():
-                    reply = (
-                        f"{greeting} Вакансия актуальна, сейчас формируем списки на заезд.\n\n"
-                        "Подскажите, пожалуйста:\n"
-                        "1. Из какого вы города и с какого числа готовы к выезду?\n"
-                        "2. Ваш возраст и гражданство?\n\n"
-                        "И напишите ваш номер телефона для связи — я наберу вас, подробно расскажу про условия и забронирую за вами место"
-                    )
-                else:
-                    reply = (
-                        f"{greeting} Вакансия актуальна, как раз ведем набор на смены.\n\n"
-                        "Подскажите:\n"
-                        "1. В каком районе вы проживаете и когда готовы выйти на смену (можно уже завтра)?\n"
-                        "2. Ваш возраст и график (постоянный или подработка)?\n\n"
-                        "И напишите номер телефона для связи — я быстро наберу, сориентирую по остановке нашего автобуса и запишу на смену"
-                    )
+            from vacancy_rules import detect_vacancy_profile
+            vac_prof = detect_vacancy_profile(session.ad_title)
+            summary_card = vac_prof.get("summary_card")
+            if not summary_card:
+                summary_card = (
+                    "Носовихинское шоссе вл 253 с 14\n"
+                    "От ст Кучино 12 мин ходьбы\n"
+                    "Упаковка зоотоваров\n"
+                    "3600 смена\n"
+                    "Ежедневные выплаты\n"
+                    "Смены с 8-20\n"
+                    "График любой\n"
+                    "Оформление по Самозанятости налог оплачивает компания\n"
+                    "Актуально?"
+                )
+            reply = f"{greeting}{summary_card}".strip()
             session.history.append({"role": "assistant", "content": reply})
             session.state = "IN_DIALOG"
             return reply
