@@ -36,7 +36,7 @@ class CandidateSession:
         elif any(w in t for w in ["тепофол", "кашир", "утеплит"]):
             return "Тепофол Кашира (Вахта)"
         elif any(w in t for w in ["арник", "серпухов", "теплич", "овощ"]):
-            return "Арника Серпухов (Вахта / Местные)"
+            return "Арника (Вахта / Местные)"
         elif any(w in t for w in ["фарма", "опалих", "красногорск", "аптеч"]):
             return "Фарма Опалиха (Местные)"
         elif any(w in t for w in ["смарт", "балаших"]):

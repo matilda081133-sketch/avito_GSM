@@ -69,7 +69,7 @@ PROJECT_ID_TO_FACILITY = {
     "128": "Королев Фарм",
     "130": "Арбиола Вармэ Рус",
     "134": "Азиано",
-    "3086": "Арника Серпухов",
+    "3086": "Арника",
     "3094": "Ароматный мир",
     "3096": "ДНС",
     "3098": "Смарт Family вахта"
@@ -157,7 +157,7 @@ def extract_facility_name(text: str = "", comments: str = "", vacancy_title: str
 
     # 7. Другие объекты по ключевым словам
     if any(w in combined for w in ["арник", "серпухов", "теплич"]):
-        return "Арника Серпухов"
+        return "Арника"
     if any(w in combined for w in ["бьюти", "дмитровск", "косметик"]):
         return "Бьюти Лайф"
     if any(w in combined for w in ["шушар", "обухов", "спб", "санкт", "питер", "spb", "peterburg", "sankt", "lenoblast"]):
@@ -422,7 +422,7 @@ RECRUITERS = [
     {"id": 81596, "name": "Маргарита Бабынина"},
 ]
 RECRUITER_IDS = [40, 32, 81596]
-NOTIFY_USER_IDS = [VALERIA_MARKETER_ID, 40, 32, 81596]
+NOTIFY_USER_IDS = [40, 32, 81596] # Исключена Валерия (82166) по запросу отключения уведомлений
 
 _recruiter_cycle = 0
 
@@ -612,20 +612,44 @@ def sync_candidate_to_b24_deal(chat_id: str, cand_data: dict, is_disqualified: b
             deal_fields['UF_CRM_1768827146250'] = '212' if is_vahta else '214'
 
             if phone:
-                c_res = call_b24('crm.contact.add', {
-                    'fields': {
-                        'NAME': name or 'Кандидат',
-                        'PHONE': [{'VALUE': phone, 'VALUE_TYPE': 'WORK'}]
-                    }
-                })
-                contact_id = c_res.get('result')
+                clean_p = re.sub(r'\D', '', phone)[-10:]
+                existing_contact_id = None
+                dup_res = call_b24('crm.duplicate.findbycomm', {'type': 'PHONE', 'values': [phone, f"+7{clean_p}", f"8{clean_p}"]})
+                dup_result = dup_res.get('result')
+                if isinstance(dup_result, dict):
+                    c_list = dup_result.get('CONTACT', [])
+                    if c_list:
+                        existing_contact_id = c_list[0]
+                
+                if existing_contact_id:
+                    contact_id = existing_contact_id
+                    print(f"[B24 SYNC] Найден существующий контакт #{contact_id} для {phone}, используем его.")
+                    # Проверяем, есть ли уже активная открытая сделка по этому контакту
+                    open_deals = call_b24('crm.deal.list', {
+                        'filter': {'CONTACT_ID': existing_contact_id, 'CLOSED': 'N', 'CATEGORY_ID': 0},
+                        'select': ['ID', 'TITLE', 'STAGE_ID', 'ASSIGNED_BY_ID']
+                    }).get('result', [])
+                    if open_deals:
+                        deal_id = open_deals[0]['ID']
+                        current_deal = open_deals[0]
+                        print(f"[B24 SYNC] У контакта #{existing_contact_id} уже есть активная сделка #{deal_id}! Не создаем дубль, привязываем чат.")
+                else:
+                    c_res = call_b24('crm.contact.add', {
+                        'fields': {
+                            'NAME': name or 'Кандидат',
+                            'PHONE': [{'VALUE': phone, 'VALUE_TYPE': 'WORK'}]
+                        }
+                    })
+                    contact_id = c_res.get('result')
+                
                 if contact_id:
                     deal_fields['CONTACT_ID'] = contact_id
             
-            d_res = call_b24('crm.deal.add', {'fields': deal_fields})
-            deal_id = d_res.get('result')
-            print(f"[B24 SYNC] Создана новая сделка #{deal_id} (Менеджер {responsible_id}) для чата {chat_id}")
-            current_deal = deal_fields
+            if not deal_id:
+                d_res = call_b24('crm.deal.add', {'fields': deal_fields})
+                deal_id = d_res.get('result')
+                print(f"[B24 SYNC] Создана новая сделка #{deal_id} (Менеджер {responsible_id}) для чата {chat_id}")
+                current_deal = deal_fields
         else:
             # Сделка уже существовала ранее
             if existing_stage == 'NEW' or not existing_stage:
