@@ -845,16 +845,8 @@ def sync_candidate_to_b24_deal(chat_id: str, cand_data: dict, is_disqualified: b
                 f"Стадия сделки автоматически возвращена из «НДЗ» в «В работе»."
             )
             try:
-                call_b24('tasks.task.add', {
-                    'fields': {
-                        'TITLE': task_title,
-                        'DESCRIPTION': task_desc,
-                        'RESPONSIBLE_ID': responsible_id,
-                        'PRIORITY': 2,
-                        'DEADLINE': (datetime.datetime.now() + datetime.timedelta(minutes=15)).strftime('%Y-%m-%d %H:%M:%S'),
-                        'UF_CRM_TASK': [f'D_{deal_id}']
-                    }
-                })
+                # Постановка задач менеджерам полностью отключена
+                pass
                 alert_text = (
                     f"🚨 🔥 [B]ОТВЕТ ПОСЛЕ НДЗ ({facility_name})![/B]\n"
                     f"Кандидат {cand_display_name} ({phone or 'номер в сделке'}) ответил в чате Авито!\n"

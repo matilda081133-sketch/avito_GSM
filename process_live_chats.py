@@ -24,6 +24,8 @@ engine = AIRecruiterEngine()
 B24_PORTAL_URL = "https://b24-4qx38o.bitrix24.ru"
 
 def create_b24_call_task(candidate_name: str, vacancy: str, phone: str, details: str, chat_id: str, responsible_id: int = None, deal_id: int = None, is_text_only: bool = False):
+    # Полностью отключено создание задач и уведомлений менеджерам по запросу руководства
+    return
     if not responsible_id:
         responsible_id = get_next_recruiter_id()
     
