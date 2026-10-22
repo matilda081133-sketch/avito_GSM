@@ -1,4 +1,8 @@
 # -*- coding: utf-8 -*-
+import sys
+print("⏸ [STANDBY] Локальный AI-рекрутер Авито временно отключен по указанию руководства.")
+sys.exit(0)
+# -*- coding: utf-8 -*-
 import time
 import sys
 from avito_api import AvitoClient

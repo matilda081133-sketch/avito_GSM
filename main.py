@@ -33,16 +33,22 @@ import max_recruiter_bot
 
 app = FastAPI(title="HR Cloud Autonomous Recruiter Service", version="2.0.0")
 
+ENABLE_AVITO_ASSISTANT = os.environ.get("ENABLE_AVITO_ASSISTANT", "False").lower() in ("true", "1", "yes")
+ENABLE_MAX_BOT = os.environ.get("ENABLE_MAX_BOT", "False").lower() in ("true", "1", "yes")
+ENABLE_B24_ENHANCER = os.environ.get("ENABLE_B24_ENHANCER", "False").lower() in ("true", "1", "yes")
+
 @app.get("/")
 @app.get("/health")
 @app.get("/healthz")
 def healthcheck():
     return {
-        "status": "online",
-        "service": "Avito + MAX Cloud AI Recruiter 24/7",
+        "status": "standby" if not (ENABLE_AVITO_ASSISTANT or ENABLE_MAX_BOT) else "online",
+        "service": "Avito + MAX AI Recruiter (Standby Mode)" if not (ENABLE_AVITO_ASSISTANT or ENABLE_MAX_BOT) else "Avito + MAX Cloud AI Recruiter 24/7",
         "version": "2.0.0",
-        "avito_active": True,
-        "max_active": True,
+        "avito_active": ENABLE_AVITO_ASSISTANT,
+        "max_active": ENABLE_MAX_BOT,
+        "b24_enhancer_active": ENABLE_B24_ENHANCER,
+        "message": "AI-ассистент Авито и бот МАКС временно отключены по указанию руководства" if not (ENABLE_AVITO_ASSISTANT or ENABLE_MAX_BOT) else "Active",
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
     }
 
@@ -102,18 +108,26 @@ def run_max_bot_thread():
 
 @app.on_event("startup")
 def startup_event():
-    # Запуск Авито в отдельном фоновом потоке
-    t_avito = threading.Thread(target=run_avito_poller_thread, daemon=True, name="AvitoPollerThread")
-    t_avito.start()
+    if ENABLE_AVITO_ASSISTANT:
+        t_avito = threading.Thread(target=run_avito_poller_thread, daemon=True, name="AvitoPollerThread")
+        t_avito.start()
+        print("🚀 [STARTUP] Дежурный Авито рекрутер запущен.", flush=True)
+    else:
+        print("⏸ [STANDBY] AI-ассистент Авито ВРЕМЕННО ОТКЛЮЧЕН.", flush=True)
 
-    # Запуск МАКС в отдельном фоновом потоке
-    t_max = threading.Thread(target=run_max_bot_thread, daemon=True, name="MaxBotThread")
-    t_max.start()
+    if ENABLE_MAX_BOT:
+        t_max = threading.Thread(target=run_max_bot_thread, daemon=True, name="MaxBotThread")
+        t_max.start()
+        print("🚀 [STARTUP] Бот МАКС запущен.", flush=True)
+    else:
+        print("⏸ [STANDBY] Бот МАКС ВРЕМЕННО ОТКЛЮЧЕН.", flush=True)
 
-    # Запуск фонового авто-обогащения сделок Битрикс24
-    t_b24 = threading.Thread(target=run_b24_enhancer_thread, daemon=True, name="B24EnhancerThread")
-    t_b24.start()
-    print("🚀 [STARTUP] Все автономные службы (Авито + МАКС + CRM) успешно стартовали в облачном режиме!", flush=True)
+    if ENABLE_B24_ENHANCER:
+        t_b24 = threading.Thread(target=run_b24_enhancer_thread, daemon=True, name="B24EnhancerThread")
+        t_b24.start()
+        print("🚀 [STARTUP] Авто-обогащение сделок Битрикс24 запущено.", flush=True)
+    else:
+        print("⏸ [STANDBY] Авто-обогащение сделок Битрикс24 отключено.", flush=True)
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", PORT if PORT else 8080))
