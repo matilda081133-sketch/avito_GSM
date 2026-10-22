@@ -418,6 +418,9 @@ def safe_send_message(chat_id: str, reply: str, already_greeted: bool, first_nam
     return True
 
 def process_single_chat(chat_summary):
+    # ВРЕМЕННО ОТКЛЮЧЕНО ПО УКАЗАНИЮ РУКОВОДСТВА
+    if os.environ.get("ENABLE_AVITO_ASSISTANT", "False").lower() not in ("true", "1", "yes"):
+        return False
     chat_id = chat_summary.get('id')
     users = chat_summary.get('users', [])
     cand_name = ""
@@ -428,8 +431,10 @@ def process_single_chat(chat_summary):
 
     context = chat_summary.get('context', {})
     item_title = ""
+    item_url = ""
     if context.get('type') == 'item':
         item_title = context.get('value', {}).get('title', '')
+        item_url = context.get('value', {}).get('url', '')
 
     raw_msgs = client.get_chat_messages(chat_id, limit=100)
     if not raw_msgs:

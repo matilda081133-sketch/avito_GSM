@@ -828,6 +828,11 @@ def handle_group_chat_message(chat_id: str, sender_name: str, text, attachments:
 # 3. ОСНОВНОЙ ЦИКЛ ОПРОСА API МАКС
 # =============================================================================
 def run_max_bot_loop():
+    # ВРЕМЕННО ОТКЛЮЧЕНО ПО УКАЗАНИЮ РУКОВОДСТВА
+    if os.environ.get("ENABLE_MAX_BOT", "False").lower() not in ("true", "1", "yes"):
+        print("⏸ [STANDBY] МАКС-бот временно отключен по указанию руководства.", flush=True)
+        while True:
+            time.sleep(3600)
     print("==================================================", flush=True)
     print("🚀 ЗАПУСК СЛУЖБЫ ЧАТ-БОТА МАКС И СВЯЗКИ С БИТРИКС24", flush=True)
     print("Ссылка на бота: https://max.ru/id9729371578_bot", flush=True)
