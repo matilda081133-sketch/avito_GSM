@@ -79,6 +79,19 @@ def run_avito_poller_thread():
             print(f"[CLOUD AVITO POLLER ERROR] {e}", flush=True)
             time.sleep(10)
 
+def run_b24_enhancer_thread():
+    """Фоновый поток авто-обогащения и форматирования сделок Б24 (каждые 30 сек)."""
+    print("[CLOUD B24] Сервис авто-обогащения сделок Битрикс24 запущен в облаке (интервал: 30с).", flush=True)
+    from b24_sync import sync_recent_raw_deals
+    while True:
+        try:
+            sync_recent_raw_deals(limit=40)
+            time.sleep(30)
+        except Exception as e:
+            print(f"[CLOUD B24 ENHANCER ERROR] {e}", flush=True)
+            time.sleep(15)
+
+
 def run_max_bot_thread():
     """Фоновый поток бота МАКС и групповых чатов объектов."""
     print("[CLOUD MAX] Сервис МАКС-бота запущен в облаке.", flush=True)
@@ -96,6 +109,10 @@ def startup_event():
     # Запуск МАКС в отдельном фоновом потоке
     t_max = threading.Thread(target=run_max_bot_thread, daemon=True, name="MaxBotThread")
     t_max.start()
+
+    # Запуск фонового авто-обогащения сделок Битрикс24
+    t_b24 = threading.Thread(target=run_b24_enhancer_thread, daemon=True, name="B24EnhancerThread")
+    t_b24.start()
     print("🚀 [STARTUP] Все автономные службы (Авито + МАКС + CRM) успешно стартовали в облачном режиме!", flush=True)
 
 if __name__ == "__main__":

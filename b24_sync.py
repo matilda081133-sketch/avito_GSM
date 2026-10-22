@@ -305,7 +305,7 @@ def parse_and_enhance_deal(deal: dict) -> dict:
     # Обновление в Битрикс24
     calculated_proj_enum = get_project_enum_id(object_name, f"{vac_title} {comments} {vac_url}")
     proj_enum = calculated_proj_enum if calculated_proj_enum else (proj_id if proj_id in PROJECT_ID_TO_FACILITY else "122")
-    is_deal_vahta = "вахт" in (object_name or "").lower() or deal.get('STAGE_ID') == 'UC_G0AG7S'
+    is_deal_vahta = "вахт" in (object_name or "").lower() or deal.get('STAGE_ID') == 'UC_G0AG7S' or 'вахт' in f"{vac_title} {comments}".lower()
     upd_fields = {
         "TITLE": new_title,
         "UF_CRM_1775470003043": object_name,
@@ -318,8 +318,77 @@ def parse_and_enhance_deal(deal: dict) -> dict:
     if age and age != "0" and not deal.get("UF_CRM_1768816356722"):
         upd_fields["UF_CRM_1768816356722"] = age
 
+    # Если сделка в "Новый отклик" и получен номер телефона — переводим в работу
+    if deal.get("STAGE_ID") == "NEW" and phone:
+        upd_fields["STAGE_ID"] = "UC_G0AG7S" if is_deal_vahta else "PREPARATION"
+
+    # Привязка или обогащение контакта телефоном
+    if contact_id and phone:
+        try:
+            c_res = call_b24("crm.contact.get", {"id": contact_id}).get("result", {})
+            c_phones = c_res.get("PHONE") or []
+            if not c_phones:
+                call_b24("crm.contact.update", {"id": contact_id, "fields": {"PHONE": [{"VALUE": phone, "VALUE_TYPE": "WORK"}]}})
+        except Exception:
+            pass
+    elif not contact_id and phone:
+        try:
+            clean_p = re.sub(r'\D', '', phone)[-10:]
+            dup_res = call_b24('crm.duplicate.findbycomm', {'type': 'PHONE', 'values': [phone, f"+7{clean_p}", f"8{clean_p}"]})
+            dup_result = dup_res.get('result')
+            c_id = None
+            if isinstance(dup_result, dict):
+                c_list = dup_result.get('CONTACT', [])
+                if c_list:
+                    c_id = c_list[0]
+            if not c_id:
+                c_res = call_b24('crm.contact.add', {'fields': {'NAME': name_clean or 'Кандидат', 'PHONE': [{'VALUE': phone, 'VALUE_TYPE': 'WORK'}]}})
+                c_id = c_res.get('result')
+            if c_id:
+                upd_fields['CONTACT_ID'] = c_id
+        except Exception:
+            pass
+
     res = call_b24("crm.deal.update", {"id": did, "fields": upd_fields})
     return {"id": did, "title": new_title, "success": res.get("result", False)}
+
+def sync_recent_raw_deals(limit: int = 40) -> int:
+    """
+    Периодически проверяет последние сделки в Битрикс24.
+    Если сделка создана коннектором Wappi/Avito с 'сырым' названием
+    (например, 'маргарита - Avito Wappi: Прямой работодатель')
+    или в названии отсутствует телефон/объект — автоматически форматирует и обогащает ее.
+    """
+    try:
+        deals = call_b24('crm.deal.list', {
+            'order': {'ID': 'DESC'},
+            'select': ['ID', 'TITLE', 'STAGE_ID', 'CATEGORY_ID', 'CONTACT_ID', 'COMMENTS',
+                       'UF_CRM_1775470003043', 'UF_CRM_1768815865773', 'UF_CRM_1768816011673',
+                       'UF_CRM_1768816356722', 'UF_CRM_1768819383825', 'UF_CRM_1768817930019',
+                       'UF_CRM_1770280572875']
+        }).get('result', [])
+        
+        enhanced_count = 0
+        for d in deals[:limit]:
+            title = d.get('TITLE') or ''
+            st = d.get('STAGE_ID') or ''
+            if st in ['LOSE', 'WON'] and '[' in title:
+                continue
+            is_raw = (
+                'wappi' in title.lower() or 
+                'avito' in title.lower() or 
+                not title.startswith('[') or 
+                ('|' not in title and st not in ['LOSE', 'WON'])
+            )
+            if is_raw:
+                res = parse_and_enhance_deal(d)
+                if res.get('success'):
+                    enhanced_count += 1
+                    print(f"[B24 ENHANCER] Обогащена сделка #{d.get('ID')}: {res.get('title')}", flush=True)
+        return enhanced_count
+    except Exception as e:
+        print(f"[B24 ENHANCER ERROR] {e}", flush=True)
+        return 0
 
 def get_or_reveal_candidate_phone(chat_id: str, client=None, context: dict = None) -> tuple:
     """
