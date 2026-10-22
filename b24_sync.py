@@ -94,8 +94,7 @@ def get_project_enum_id(facility_name: str, vacancy: str = "") -> str:
         return "132"  # Фарма Цвет
     elif any(w in comb for w in ["бьюти", "дмитровск", "косметик"]):
         return "118"  # Бьюти Лайф
-    elif any(w in comb for w in ["спорт", "прайм", "электрик"]):
-        return "64"   # Прайм Спорт
+
     elif any(w in comb for w in ["русклимат", "рус климат", "киржач"]):
         return "3052" # РусКлимат
     elif any(w in comb for w in ["аква косметик", "аквакосметик"]):
@@ -106,7 +105,7 @@ def get_project_enum_id(facility_name: str, vacancy: str = "") -> str:
         return "3054" # Прачечная
     elif any(w in comb for w in ["манго"]):
         return "66"   # Манго Фреш
-    elif any(w in comb for w in ["сдс", "брехов", "пятницк", "химки", "khimki", "зеленоград", "zelenograd", "сходня", "лунево"]):
+    elif any(w in comb for w in ["сдс", "брехов", "брёхов", "пятницк", "химки", "khimki", "зеленоград", "zelenograd", "сходня", "лунево", "электрик", "электрика", "электрики", "электротовар", "электротоваров"]):
         return "124"  # СДС Химки
     elif any(w in comb for w in ["шушар", "спб", "санкт"]):
         return "126"  # Стандарт СПБ
@@ -144,7 +143,7 @@ def extract_facility_name(text: str = "", comments: str = "", vacancy_title: str
         return "Смарт Балашиха"
 
     # 4. СДС Химки / Брёхово
-    if any(w in combined for w in ["сдс", "брехов", "брёхов", "пятницк", "фомичев", "brehov", "khimki", "sds", "зеленоград", "zelenograd", "сходня", "лунево", "ленинградк"]):
+    if any(w in combined for w in ["сдс", "брехов", "брёхов", "пятницк", "фомичев", "brehov", "khimki", "sds", "зеленоград", "zelenograd", "сходня", "лунево", "ленинградк", "электрик", "электрика", "электрики", "электротовар", "электротоваров"]):
         return "СДС Химки"
 
     # 5. Тепофол Кашира
@@ -186,8 +185,7 @@ def extract_facility_name(text: str = "", comments: str = "", vacancy_title: str
         return "Одинцово"
     if any(w in combined for w in ["тула", "донской"]):
         return "Тула"
-    if any(w in combined for w in ["спорт", "прайм", "электрик"]):
-        return "Прайм Спорт"
+
     if any(w in combined for w in ["клининг", "уборщик", "уборщиц", "уборк", "поломоечн"]):
         return "Клининг"
     if "вахт" in combined:

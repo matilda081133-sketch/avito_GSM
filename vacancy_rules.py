@@ -278,7 +278,7 @@ VACANCY_CRITERIA = {
         "project_id": "3058",
         "name": "СДС-Брехово (Химки / Комплектовщик)",
         "facility_title": "СДС Брехово",
-        "keywords": ["сдс", "брехов", "брёхов", "электротовар"],
+        "keywords": ["сдс", "брехов", "брёхов", "электротовар", "электротоваров", "электрик", "электрика", "электрики", "склад электрики"],
         "min_age": 18,
         "max_age": 50,
         "allowed_citizenship": ["рф", "россия"],
@@ -453,8 +453,11 @@ CITY_ALIASES = {
     "владимир": ("Владимир", "1572")
 }
 
-def detect_vacancy_profile(title: str) -> dict:
-    t = (title or "").lower()
+def detect_vacancy_profile(title: str, facility_name: str = "") -> dict:
+    t = f"{title or ''} {facility_name or ''}".lower()
+    # 1. Приоритетная проверка СДС Химки / Брехово / склад электрики
+    if any(k in t for k in ["сдс", "брехов", "брёхов", "электрик", "электрика", "электрики", "электротовар"]):
+        return VACANCY_CRITERIA["SDS_BREKHOVO"]
     for key, vac in VACANCY_CRITERIA.items():
         if vac.get("keywords") and any(k in t for k in vac["keywords"]):
             return vac

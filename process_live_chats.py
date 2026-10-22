@@ -649,7 +649,8 @@ def process_single_chat(chat_summary):
     else:
         prefix = f"Здравствуйте, {first_name}!\n" if first_name else "Здравствуйте!\n"
 
-    vac_prof = detect_vacancy_profile(item_title)
+    fac_name = extract_facility_name(text=f"{item_title} {all_cand_text}", vacancy_title=item_title, vacancy_url=item_url)
+    vac_prof = detect_vacancy_profile(item_title, facility_name=fac_name)
     eval_res = evaluate_candidate_fit(vac_prof, known_age, known_cit)
 
     # Проверка на глухонемого / слабослышащего / требование общаться только текстом
