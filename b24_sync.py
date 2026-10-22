@@ -422,7 +422,7 @@ RECRUITERS = [
     {"id": 81596, "name": "Маргарита Бабынина"},
 ]
 RECRUITER_IDS = [40, 32, 81596]
-NOTIFY_USER_IDS = [40, 32, 81596] # Исключена Валерия (82166) по запросу отключения уведомлений
+NOTIFY_USER_IDS = [] # Полностью отключена массовая рассылка уведомлений по запросу пользователя
 
 _recruiter_cycle = 0
 
@@ -794,10 +794,8 @@ def sync_candidate_to_b24_deal(chat_id: str, cand_data: dict, is_disqualified: b
                     f"⏱ Срочно наберите кандидата в течение 15 минут!\n"
                     f"👉 [URL={deal_url}]Открыть сделку #{deal_id}[/URL]"
                 )
-                call_b24('im.notify.system.add', {
-                    'USER_ID': responsible_id,
-                    'MESSAGE': alert_text
-                })
+                # Системное уведомление отключено по запросу пользователя
+                pass
             except Exception as e_ndz:
                 print(f"[B24 SYNC ERROR] Ошибка постановки задачи после НДЗ: {e_ndz}")
         elif phone:

@@ -119,7 +119,8 @@ def send_b24_task_alert(candidate_name: str, facility: str, phone: str, details:
             f"⏱ Регламент первого звонка по SLA: до 15 минут!\n"
             f"⚠️ Задача привязана к сделке. В чат Авито писать не нужно — звоните по телефону!"
         )
-    recipients = set([responsible_id] + NOTIFY_USER_IDS)
+    # Массовая рассылка отключена: уведомление получает ТОЛЬКО назначенный рекрутер
+    recipients = [responsible_id] if responsible_id else []
     for uid in recipients:
         payload = json.dumps({'USER_ID': uid, 'MESSAGE': msg}).encode('utf-8')
         req = urllib.request.Request(B24_WEBHOOK_URL + 'im.notify.system.add', data=payload, headers={'Content-Type': 'application/json'})
