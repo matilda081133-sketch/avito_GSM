@@ -322,28 +322,131 @@ def create_call_task(responsible_id: int, deal_id: int, title: str, description:
 # =============================================================================
 
 VACANCIES_CATALOG = {
-    "1": {"name": "АБИ Владимир", "enum_id": "120", "summary": "🥩 АБИ Владимир — 3700–4900 ₽ (навеска 9800 ₽/сут). 3-разовое питание бесплатно, хостел/квартиры."},
-    "2": {"name": "Тепофол Кашира", "enum_id": "3056", "summary": "🏭 Тепофол Кашира — 3800 ₽/смена. 2-разовое питание, квартиры, продукция лёгкая."},
-    "3": {"name": "Арника Раменское", "enum_id": "3062", "summary": "📦 Арника Раменское — 4200 ₽/смена (с питанием). Мебельный склад, вахта 18 или 30 смен."},
-    "4": {"name": "Склад автозапчастей Подольск", "enum_id": "3108", "summary": "🚗 Автозапчасти Подольск — 4500 ₽/смена фиксированно. Склад автозапчастей."},
-    "5": {"name": "СДС Химки", "enum_id": None, "summary": "⚡ СДС Химки — 4500–5000 ₽/смена. Ежедневные выплаты, трансфер."},
-    "6": {"name": "Фарма Цвет Опалиха", "enum_id": "3060", "summary": "🍵 Фарма Опалиха — от 3550 ₽/смена. Фасовка чая из трав, лёгкая работа сидя."},
-    "7": {"name": "Бьюти Лайф Москва", "enum_id": "3104", "summary": "💄 Бьюти Савёловская — 4000 ₽/смена. Упаковка косметики и БАДов."},
-    "8": {"name": "Смарт Балашиха", "enum_id": None, "summary": "🐶 Смарт Балашиха — 3400–3710 ₽/смена. Зоотовары, вахта в 2-комн. квартире."}
+    "1": {"name": "Арника Раменское", "enum_id": "3062", "summary": "📦 Арника Раменское — 4200 ₽/смена. Мебельный склад, вахта 18 или 30 смен, проживание в квартире в пешей доступности."},
+    "2": {"name": "АБИ Владимир", "enum_id": "120", "summary": "🥩 АБИ Владимир — 3700–4900 ₽/смена (навеска до 9800 ₽/сут). Бесплатное 3-разовое горячее питание, проживание, компенсация дороги."},
+    "3": {"name": "Тепофол Кашира", "enum_id": "3056", "summary": "🏭 Тепофол Кашира — 3800 ₽/смена. Лёгкая продукция, бесплатное 2-разовое питание, проживание в 2-комн. квартирах."},
+    "4": {"name": "Смарт Балашиха", "enum_id": "3098", "summary": "🐶 Смарт Балашиха — 3400–3710 ₽/смена. Тёплый склад зоотоваров, вахта от 15 смен, проживание в квартире рядом."}
 }
 
 MENU_TEXT = (
-    "Выберите, какой объект вам подходит (напишите номер 1–8):\n\n"
-    "1️⃣ АБИ Владимир — 3700–4900 ₽/смена. 3-разовое питание бесплатно!\n"
-    "2️⃣ Тепофол Кашира — 3800 ₽/смена. 2-разовое питание, квартиры.\n"
-    "3️⃣ Арника Раменское — 4200 ₽/смена. Мебельный склад, 18 или 30 смен.\n"
-    "4️⃣ Автозапчасти Подольск — 4500 ₽/смена фиксированно.\n"
-    "5️⃣ СДС Химки — 4500–5000 ₽/смена. Ежедневные выплаты, трансфер.\n"
-    "6️⃣ Фарма Опалиха — от 3550 ₽/смена. Чай из трав, лёгкая работа сидя.\n"
-    "7️⃣ Бьюти Савёловская — 4000 ₽/смена. Косметика и БАДы.\n"
-    "8️⃣ Смарт Балашиха — 3400–3710 ₽/смена. Зоотовары, проживание в квартире.\n\n"
-    "👉 Напишите номер объекта и отправьте фото главной страницы паспорта для оформления пропуска!"
+    "Здравствуйте! 👋 Рады вашему отклику на работу вахтой с бесплатным проживанием и питанием!\n\n"
+    "Сейчас у нас открыт набор на 4 ключевых объекта:\n\n"
+    "1️⃣ **Арника (Раменское, МО)** — мебельный склад\n"
+    "• Ставка: **4 200 ₽ / смена** (вахта 18 или 30 смен)\n"
+    "• Бесплатное проживание в квартире в пешей доступности от склада\n"
+    "• Еженедельные авансы от 5 000 ₽, компенсация дороги до 5 000 ₽\n\n"
+    "2️⃣ **АБИ (г. Владимир)** — мясное производство (колбасы, полуфабрикаты)\n"
+    "• Ставка: **3 700 – 4 900 ₽ / смена** (навеска до **9 800 ₽ / сут**)\n"
+    "• **Бесплатное 3-разовое горячее питание**, комфортное жилье, спецодежда\n"
+    "• Компенсация проезда до 5 000 ₽, такси по приезду\n\n"
+    "3️⃣ **Тепофол (Кашира, МО)** — завод теплоизоляции (легкая продукция)\n"
+    "• Ставка: **3 800 ₽ / смена** (вахта 35 смен)\n"
+    "• **Бесплатное 2-разовое питание**, проживание в 2-комнатных квартирах\n"
+    "• Еженедельные авансы от 5 000 ₽, усиленный аванс до 20 000 ₽\n\n"
+    "4️⃣ **Смарт Family (Балашиха, МО)** — тёплый склад зоотоваров\n"
+    "• Ставка: **3 400 – 3 710 ₽ / смена** (вахта 15 / 35 / 45 смен)\n"
+    "• Лёгкая работа (корма, игрушки для животных), тёплый склад\n"
+    "• Проживание в 2-комнатной квартире (пешком 7–10 мин от склада)\n\n"
+    "👉 **Напишите номер вакансии (1, 2, 3 или 4) и ваш контактный номер телефона**, чтобы мы забронировали за вами место и зафиксировали ставку!"
 )
+
+
+def sync_sms_candidate_to_b24(phone: str, facility_name: str = None, vac_code: str = None):
+    """
+    Создает или обновляет сделку в Битрикс24 при получении номера:
+    - Источник: Рассылка MAX (MAX_BROADCAST)
+    - Название: {Объект} - {Номер}
+    - Обязательно код вакансии (UF_CRM_1768815865773) и название (UF_CRM_1775470003043)
+    """
+    if not phone:
+        return None
+    clean_p = re.sub(r'\D', '', phone)
+    if clean_p.startswith('8') and len(clean_p) == 11:
+        clean_p = '7' + clean_p[1:]
+    fmt_phone = f"+{clean_p}"
+
+    fac = facility_name or "Вахта"
+    code = vac_code
+    if not code:
+        fl = fac.lower()
+        if "арник" in fl: code = "3056"
+        elif "аби" in fl or "владимир" in fl: code = "62"
+        elif "тепофол" in fl or "кашир" in fl: code = "3050"
+        elif "смарт" in fl or "балаших" in fl: code = "3098"
+        else: code = "62"
+
+    deal_title = f"{fac} - {fmt_phone}"
+
+    # 1. Поиск контакта
+    c_res = b24_sync.call_b24('crm.duplicate.findbycomm', {
+        'type': 'PHONE',
+        'values': [fmt_phone, clean_p, clean_p[-10:]]
+    })
+    contact_id = None
+    res_data = c_res.get('result')
+    if isinstance(res_data, dict) and res_data.get('CONTACT'):
+        contact_id = res_data['CONTACT'][0]
+    else:
+        nc = b24_sync.call_b24('crm.contact.add', {
+            'fields': {
+                'NAME': 'Кандидат Вахта',
+                'PHONE': [{'VALUE': fmt_phone, 'VALUE_TYPE': 'WORK'}],
+                'SOURCE_ID': 'MAX_BROADCAST'
+            }
+        })
+        contact_id = nc.get('result')
+
+    # 2. Поиск существующей сделки
+    deal = find_b24_deal_by_phone(clean_p)
+    if deal:
+        deal_id = deal["ID"]
+        b24_sync.call_b24('crm.deal.update', {
+            'id': deal_id,
+            'fields': {
+                'TITLE': deal_title,
+                'SOURCE_ID': 'MAX_BROADCAST',
+                'UF_CRM_1775470003043': fac,
+                'UF_CRM_1768815865773': code,
+                'UF_CRM_1768827146250': '212',
+                'UF_CRM_1768816742475': '98'
+            }
+        })
+        b24_sync.call_b24('crm.timeline.comment.add', {
+            'fields': {
+                'ENTITY_ID': deal_id,
+                'ENTITY_TYPE': 'deal',
+                'COMMENT': f"📥 [РАССЫЛКА MAX]: Кандидат оставил номер {fmt_phone} и выбрал объект '{fac}' (код вакансии: {code}). Сделка обновлена."
+            }
+        })
+        print(f"[B24 SYNC] Сделка #{deal_id} обновлена: {deal_title} (код {code})", flush=True)
+        return str(deal_id)
+    else:
+        # 3. Создание новой сделки
+        nd = b24_sync.call_b24('crm.deal.add', {
+            'fields': {
+                'TITLE': deal_title,
+                'CATEGORY_ID': '0',
+                'STAGE_ID': 'NEW',
+                'SOURCE_ID': 'MAX_BROADCAST',
+                'CONTACT_ID': contact_id,
+                'UF_CRM_1775470003043': fac,
+                'UF_CRM_1768815865773': code,
+                'UF_CRM_1768827146250': '212',
+                'UF_CRM_1768816742475': '98'
+            }
+        })
+        deal_id = nd.get('result')
+        if deal_id:
+            b24_sync.call_b24('crm.timeline.comment.add', {
+                'fields': {
+                    'ENTITY_ID': deal_id,
+                    'ENTITY_TYPE': 'deal',
+                    'COMMENT': f"📥 [РАССЫЛКА MAX]: Новый отклик по СМС! Номер {fmt_phone}, объект '{fac}', код вакансии: {code}."
+                }
+            })
+            print(f"[B24 SYNC] СОЗДАНА НОВАЯ СДЕЛКА #{deal_id}: {deal_title} (код {code})", flush=True)
+            return str(deal_id)
+    return None
 
 def handle_direct_dialog(user_id: int, text, attachments: list, state: dict):
     uid_str = str(user_id)
@@ -438,23 +541,19 @@ def handle_direct_dialog(user_id: int, text, attachments: list, state: dict):
             send_max_message(user_id=user_id, text=reply)
             return
 
-    # 4. Если кандидат ТОЛЬКО ЧТО прислал номер телефона (проверяем наличие сделки и вакансии!)
+    # 4. Если кандидат ТОЛЬКО ЧТО прислал номер телефона — СРАЗУ СОЗДАЕМ/ОБНОВЛЯЕМ СДЕЛКУ В БИТРИКС24!
     if new_phone_provided:
-        if not deal and session.get("phone"):
-            deal = find_b24_deal_by_phone(session["phone"])
-            if deal:
-                session["deal_id"] = deal["ID"]
-                t = deal.get("TITLE") or ""
-                fac_name, enum_id = detect_facility_from_text(t)
-                if fac_name:
-                    session["facility"] = fac_name
-                save_state(state)
+        # Создаем или обновляем сделку в Bitrix24
+        did = sync_sms_candidate_to_b24(session["phone"], session.get("facility"))
+        if did:
+            session["deal_id"] = did
+            save_state(state)
 
-        # СЛУЧАЙ А: Кандидат найден в CRM и объект УЖЕ ИЗВЕСТЕН! (НЕ ПРЕДЛАГАЕМ ВЫБОР!)
+        # СЛУЧАЙ А: Объект уже известен (выбран)
         if session.get("facility"):
             reply = (
-                f"Отлично, нашли вашу анкету по объекту: **{session['facility']}**! ✅\n\n"
-                "Ставка и бронь места зафиксированы за вами.\n\n"
+                f"Отлично, номер {session['phone']} зафиксирован по объекту: **{session['facility']}**! ✅\n\n"
+                "Сделка создана, ставка и бронь места зафиксированы за вами.\n\n"
                 "Чтобы служба безопасности успела заранее оформить для вас разовый электронный пропуск на КПП к заезду — отправьте, пожалуйста, **фото главной страницы паспорта** (разворот с фото).\n\n"
                 "🔒 Серию и номер по желанию можете прикрыть пальцем — нужны только ФИО, дата рождения и фото для КПП."
             )
@@ -463,7 +562,7 @@ def handle_direct_dialog(user_id: int, text, attachments: list, state: dict):
             save_state(state)
             return
         else:
-            # СЛУЧАЙ Б: Объект неизвестен — предлагаем краткий выбор
+            # СЛУЧАЙ Б: Объект еще не выбран — предлагаем выбор из 4 объектов
             reply = (
                 f"Отлично, номер {session['phone']} зафиксирован! ✅\n\n"
                 + MENU_TEXT
@@ -473,28 +572,29 @@ def handle_direct_dialog(user_id: int, text, attachments: list, state: dict):
             save_state(state)
             return
 
-    # 5. Обработка выбора объекта по номеру (1-8) или названию
-    num_match = re.search(r'\b([1-8])\b', text_clean)
-    if num_match and session["step"] in ["AWAITING_CHOICE_OR_PASSPORT", "AWAITING_DATA"]:
+    # 5. Обработка выбора объекта по номеру (1-4) или названию
+    num_match = re.search(r'\b([1-4])\b', text_clean)
+    if num_match and session["step"] in ["AWAITING_CHOICE_OR_PASSPORT", "AWAITING_DATA", "AWAITING_CHOICE_AND_PHONE", "START"]:
         chosen_key = num_match.group(1)
         vac_info = VACANCIES_CATALOG.get(chosen_key)
         if vac_info:
             session["facility"] = vac_info["name"]
             save_state(state)
-            # Обновляем сделку если есть
-            if session.get("deal_id"):
-                upd_fields = {}
-                if vac_info.get("enum_id"):
-                    upd_fields["UF_CRM_1775470003043"] = vac_info["enum_id"]
-                b24_sync.call_b24("crm.deal.update", {"id": session["deal_id"], "fields": upd_fields})
+            
+            # Если номер уже есть — сразу обновляем сделку в Bitrix24 с кодом вакансии и новым названием
+            if session.get("phone"):
+                did = sync_sms_candidate_to_b24(session["phone"], vac_info["name"], vac_info.get("enum_id"))
+                if did:
+                    session["deal_id"] = did
+                    save_state(state)
 
             reply = (
                 f"Отлично! {vac_info['summary']}\n\n"
-                "Чтобы оформить электронный пропуск на КПП к вашему приезду:\n"
-                + ("1️⃣ Напишите ваш контактный номер телефона\n" if not session.get("phone") else "")
-                + "📸 Отправьте фото главной страницы паспорта (разворот с фото, серию/номер можно прикрыть)."
+                + ("📱 **Напишите ваш контактный номер телефона**, чтобы мы забронировали место в общежитии и зафиксировали ставку!\n\n" if not session.get("phone") else "")
+                + "📸 Для оформления пропуска на КПП к вашему приезду отправьте фото главной страницы паспорта (разворот с фото, серию/номер можно закрыть)."
             )
             send_max_message(user_id=user_id, text=reply)
+            return
             return
 
     # 6. Отработка согласия прислать фото
@@ -532,15 +632,10 @@ def handle_direct_dialog(user_id: int, text, attachments: list, state: dict):
         send_max_message(user_id=user_id, text=reply)
         return
 
-    # 9. Первое касание / /start / Приветствие — ЗАПРАШИВАЕМ ТОЛЬКО НОМЕР СНАЧАЛА!
-    if session["step"] == "START" or text_lower in ["/start", "start", "привет", "здравствуйте", "старт", "начать", "добрый день", "запустить"] or "вахт" in text_lower or len(text_clean) < 20:
-        welcome_text = (
-            "Здравствуйте! 👋\n\n"
-            "Склад и производство — режимные охраняемые объекты со строгим контрольно-пропускным пунктом. Чтобы служба безопасности успела заранее оформить для вас электронный пропуск к заезду и забронировать место в общежитии:\n\n"
-            "📱 **Напишите ваш контактный номер телефона**, по которому вы оставляли отклик на вахту."
-        )
-        send_max_message(user_id=user_id, text=welcome_text)
-        session["step"] = "AWAITING_PHONE"
+        # 9. Первое касание / /start / Приветствие — показываем приветствие и 4 вакансии!
+    if session["step"] == "START" or text_lower in ["/start", "start", "привет", "здравствуйте", "старт", "начать", "добрый день", "запустить"] or "вахт" in text_lower:
+        send_max_message(user_id=user_id, text=MENU_TEXT)
+        session["step"] = "AWAITING_CHOICE_AND_PHONE"
         save_state(state)
         return
 
@@ -830,7 +925,7 @@ def handle_group_chat_message(chat_id: str, sender_name: str, text, attachments:
 # =============================================================================
 def run_max_bot_loop():
     # ВРЕМЕННО ОТКЛЮЧЕНО ПО УКАЗАНИЮ РУКОВОДСТВА
-    if os.environ.get("ENABLE_MAX_BOT", "False").lower() not in ("true", "1", "yes"):
+    if os.environ.get("ENABLE_MAX_BOT", "1").lower() not in ("true", "1", "yes"):
         print("⏸ [STANDBY] МАКС-бот временно отключен по указанию руководства.", flush=True)
         while True:
             time.sleep(3600)
