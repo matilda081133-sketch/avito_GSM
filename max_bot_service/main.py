@@ -242,14 +242,18 @@ def create_b24_deal(name, phone, object_key):
         print(f"[B24 CREATE ERR] {e}", flush=True)
         return None
 
-def get_object_message(obj):
-    return (
-        f"{obj['excerpt']}\n\n"
-        "────────────────────────\n"
-        "⚠️ ВАЖНО: На ближайший заезд осталось всего 3 свободных места!\n\n"
-        "📞 На какой номер телефона забронировать за вами место?\n"
-        "Напишите номер в ответном сообщении — менеджер сразу закрепит бронь за вами."
-    )
+PHONE_CTA_TEXT = (
+    "⚠️ ВАЖНО: На ближайший заезд осталось всего 3 свободных места!\n\n"
+    "📞 На какой номер телефона забронировать за вами место?\n"
+    "(Напишите номер в ответном сообщении — менеджер сразу закрепит бронь за вами)"
+)
+
+def send_object_presentation(chat_id, obj):
+    # 1. Сначала отправляем выжимку по условиям вакансии
+    send_message(chat_id, obj['excerpt'])
+    time.sleep(1)
+    # 2. Отдельным следующим сообщением отправляем призыв оставить телефон
+    send_message(chat_id, PHONE_CTA_TEXT)
 
 def bot_worker_loop():
     print("=== MAX BOT CLOUD WORKER STARTED (RENDER 24/7) ===", flush=True)
@@ -299,8 +303,8 @@ def bot_worker_loop():
                         if cb_id:
                             answer_callback(cb_id, f"Выбран: {obj['title']}")
                             
-                        # Отправляем выжимку и вопрос-призыв с ограничением мест
-                        send_message(chat_id, get_object_message(obj))
+                        # Отправляем сначала выжимку, а затем отдельным сообщением призыв оставить телефон
+                        send_object_presentation(chat_id, obj)
 
                 # --- B. ВХОДЯЩЕЕ ТЕКСТОВОЕ СООБЩЕНИЕ / ФОТО ---
                 elif u_type == "message_created":
@@ -377,7 +381,7 @@ def bot_worker_loop():
                         st["object"] = matched_key
                         st["name"] = name
                         st["step"] = "AWAITING_PHONE"
-                        send_message(chat_id, get_object_message(obj))
+                        send_object_presentation(chat_id, obj)
                         continue
 
                     # 4. Если кандидат уже выбрал объект и мы ждем телефон, но он пишет любой вопрос/текст
