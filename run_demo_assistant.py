@@ -9,6 +9,7 @@ import os
 import time
 import re
 import datetime
+import json
 
 if sys.stdout is not None:
     try:
@@ -26,13 +27,55 @@ client = AvitoClient(AVITO_CLIENT_ID, AVITO_CLIENT_SECRET, AVITO_USER_ID)
 ALLOWED_CANDIDATE_NAMES = ["валерия", "цицилина", "валерия цицилина", "valeria"]
 TARGET_CHAT_ID = os.environ.get("DEMO_CHAT_ID", "").strip()
 # CABINET_MODE: True = работа со всеми кандидатами кабинета 'Прямой работодатель'
-CABINET_MODE = os.environ.get("CABINET_MODE", "1") == "1" 
+CABINET_MODE = os.environ.get("CABINET_MODE", "1") == "1"
+
+# СТРОГИЙ РЕЖИМ: обрабатывать ТОЛЬКО новые чаты, появившиеся с момента запуска
+ONLY_NEW_CHATS = True
+BOT_START_TIME = int(os.environ.get("BOT_START_TIME", str(int(time.time()))))
+
+ACTIVE_NEW_CHATS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "active_new_chats.json")
+
+def load_active_new_chats() -> set:
+    if os.path.exists(ACTIVE_NEW_CHATS_FILE):
+        try:
+            with open(ACTIVE_NEW_CHATS_FILE, "r", encoding="utf-8") as f:
+                return set(json.load(f))
+        except Exception:
+            pass
+    return set()
+
+def save_active_new_chats(chats_set: set):
+    try:
+        with open(ACTIVE_NEW_CHATS_FILE, "w", encoding="utf-8") as f:
+            json.dump(list(chats_set), f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"Ошибка сохранения активных чатов: {e}")
+
+active_new_chats = load_active_new_chats()
+
+def get_initial_existing_chats():
+    existing = set()
+    try:
+        for ch in client.get_recent_chats(limit=100):
+            if ch.get('id'):
+                existing.add(ch.get('id'))
+        for ch in client.get_unread_chats(limit=100):
+            if ch.get('id'):
+                existing.add(ch.get('id'))
+    except Exception as e:
+        print(f"Ошибка получения существующих чатов: {e}")
+    return existing
+
+print(f"⏳ Фиксация существующих чатов кабинета (всего в базе до запуска)...")
+initial_existing_chats = get_initial_existing_chats()
+print(f"🔒 Зафиксировано {len(initial_existing_chats)} старых чатов. Ассистент будет отвечать СТРОГО на НОВЫЕ чаты!")
+
 
 print("=" * 70)
 print("🛡️ ЗАПУСК AI-АССИСТЕНТА GSM LOGISTICS (ОФИЦИАЛЬНЫЙ РЕЖИМ)")
 if CABINET_MODE:
     print(f"🏢 Кабинет: 'Прямой работодатель' (User ID: {AVITO_USER_ID})")
-    print("🎯 Режим: Обработка ВСЕХ входящих откликов кабинета с точной привязкой к объявлению!")
+    print("🎯 Режим: Обработка СТРОГО НОВЫХ чатов с точной привязкой к объявлению!")
 else:
     print(f"👤 Тестовый режим: Валерия Цицилина (White-list: {ALLOWED_CANDIDATE_NAMES})")
 print("=" * 70)
@@ -925,16 +968,24 @@ def check_and_reply_valeria():
                     cand_name = u.get('name', '')
                     break
             
-            is_target = False
-            if CABINET_MODE:
-                is_target = True
-            elif TARGET_CHAT_ID and cid == TARGET_CHAT_ID:
-                is_target = True
-            elif any(p in cand_name.lower() for p in ALLOWED_CANDIDATE_NAMES):
-                is_target = True
-                
-            if not is_target:
-                continue
+            is_test_chat = (TARGET_CHAT_ID and cid == TARGET_CHAT_ID) or any(p in cand_name.lower() for p in ALLOWED_CANDIDATE_NAMES)
+
+            if not is_test_chat:
+                if not CABINET_MODE:
+                    continue
+                # СТРОГАЯ ФИЛЬТРАЦИЯ: ТОЛЬКО НОВЫЕ ЧАТЫ
+                chat_created = c.get('created', 0)
+                is_known_new = cid in active_new_chats
+                is_freshly_created = (chat_created >= BOT_START_TIME) and (cid not in initial_existing_chats)
+
+                if not (is_known_new or is_freshly_created):
+                    # Старый чат, созданный до запуска бота — полностью игнорируем!
+                    continue
+
+                if is_freshly_created and cid not in active_new_chats:
+                    active_new_chats.add(cid)
+                    save_active_new_chats(active_new_chats)
+                    print(f"\n✨ [НОВЫЙ ЧАТ] Поступил новый отклик: {cand_name} (чат {cid}, создан: {chat_created})")
                 
             item_ctx = c.get('context', {}).get('value', {})
             item_title = item_ctx.get('title', '')
