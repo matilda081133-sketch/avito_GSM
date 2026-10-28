@@ -636,7 +636,6 @@ def sync_candidate_to_b24_deal(chat_id: str, cand_data: dict, is_disqualified: b
             init_stage = 'NEW'
             init_cat_id = 0
             if is_disqualified:
-                deal_fields['UF_CRM_1768823747857'] = '204'  # Причина неуспеха: Нецелевой
                 nt_cat, nt_st = get_non_target_category_info()
                 if nt_cat:
                     init_cat_id = nt_cat
@@ -659,6 +658,8 @@ def sync_candidate_to_b24_deal(chat_id: str, cand_data: dict, is_disqualified: b
             }
             if init_cat_id:
                 deal_fields['CATEGORY_ID'] = init_cat_id
+            if is_disqualified:
+                deal_fields['UF_CRM_1768823747857'] = '204'  # Причина неуспеха: Нецелевой
 
             # Авто-заполнение гражданства (если кандидат ответил)
             cit_val = cand_data.get('citizenship') or ''
