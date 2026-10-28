@@ -491,11 +491,32 @@ def process_valeria_chat(chat_id: str, cand_name: str, item_title: str, msgs: li
 
     print(f"\n[{datetime.datetime.now().strftime('%H:%M:%S')}] 🔥 СООБЩЕНИЕ ОТ ВАЛЕРИИ: '{valeria_text}'")
 
-    # Историю кандидата и историю бота разделяем четко
-    cand_msgs = [m.get('content', {}).get('text', '') for m in msgs if m.get('author_id') != AVITO_USER_ID and m.get('author_id') != 0]
+    # СБРОС СЕССИИ:
+    # 1. Если кандидат пишет "заново", "сначала", "с чистого листа"
+    # 2. Либо если предыдущий диалог был завершен ботом ("заявка на данный объект уже закрыта" / "всего доброго")
+    is_explicit_restart = any(w in valeria_text.lower() for w in ["заново", "сначала", "с чистого листа", "начнем заново", "давай сначала", "рестарт"])
+
+    last_close_idx = -1
+    for idx, m in enumerate(msgs[:-1]):
+        if m.get('author_id') == AVITO_USER_ID:
+            t_bot = m.get('content', {}).get('text', '').lower()
+            if "заявка на данный объект уже закрыта" in t_bot or "всего доброго" in t_bot:
+                last_close_idx = idx
+
+    if is_explicit_restart:
+        active_msgs = [last_msg]
+        print("🔄 Обнаружена команда полного сброса диалога! Начинаем с чистого листа.")
+    elif last_close_idx != -1:
+        active_msgs = msgs[last_close_idx + 1:]
+        print(f"🔄 Предыдущая сессия была закрыта. Начинаем новую сессию (активных сообщений: {len(active_msgs)}).")
+    else:
+        active_msgs = msgs
+
+    # Историю кандидата и историю бота берем строго из АКТИВНОЙ сессии
+    cand_msgs = [m.get('content', {}).get('text', '') for m in active_msgs if m.get('author_id') != AVITO_USER_ID and m.get('author_id') != 0]
     cand_history_only = " \n ".join(cand_msgs[:-1])
 
-    our_msgs = [m.get('content', {}).get('text', '') for m in msgs if m.get('author_id') == AVITO_USER_ID]
+    our_msgs = [m.get('content', {}).get('text', '') for m in active_msgs if m.get('author_id') == AVITO_USER_ID]
     our_history = " \n ".join(our_msgs)
 
     reply_text, is_disqualified, disq_reason = generate_human_reply(
@@ -504,6 +525,11 @@ def process_valeria_chat(chat_id: str, cand_name: str, item_title: str, msgs: li
         cand_history_only=cand_history_only,
         our_history=our_history
     )
+
+    if is_explicit_restart and not reply_text.startswith("Здравствуйте"):
+        fac_key = detect_facility(item_title)
+        intro_card = FACILITIES.get(fac_key, FACILITIES["ABI"])["intro"]
+        reply_text = f"Валерия, договорились, начинаем с чистого листа!\n\n{intro_card}"
 
     print(f"🤖 ОТВЕТ АССИСТЕНТА:\n{reply_text}")
 
