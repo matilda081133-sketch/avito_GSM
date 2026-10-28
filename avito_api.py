@@ -64,12 +64,21 @@ class AvitoClient:
             "client_id": self.client_id,
             "client_secret": self.client_secret
         }
-        resp = self._request_with_retry("POST", url, data=data, timeout=12)
-        res = resp.json()
-        self.access_token = res["access_token"]
-        self.token_expires_at = time.time() + res.get("expires_in", 86400)
-        self._save_cached_token()
-        return self.access_token
+        for attempt in range(1, 4):
+            try:
+                resp = self._request_with_retry("POST", url, data=data, timeout=12)
+                res = resp.json()
+                if "access_token" in res:
+                    self.access_token = res["access_token"]
+                    self.token_expires_at = time.time() + res.get("expires_in", 86400)
+                    self._save_cached_token()
+                    return self.access_token
+                else:
+                    print(f"[AvitoClient] Token refresh response warning: {res}")
+            except Exception as e:
+                print(f"[AvitoClient] Token refresh attempt {attempt} error: {e}")
+            time.sleep(2)
+        return self.access_token or ""
 
     def send_message(self, chat_id: str, text: str) -> dict:
         token = self.get_token()

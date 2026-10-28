@@ -954,6 +954,7 @@ def check_and_reply_valeria():
         
         candidates = unread + recent
         seen = set()
+        replied_any = False
         
         for c in candidates:
             cid = c.get('id')
@@ -985,7 +986,7 @@ def check_and_reply_valeria():
                 if is_freshly_created and cid not in active_new_chats:
                     active_new_chats.add(cid)
                     save_active_new_chats(active_new_chats)
-                    print(f"\n✨ [НОВЫЙ ЧАТ] Поступил новый отклик: {cand_name} (чат {cid}, создан: {chat_created})")
+                    print(f"\n✨ [НОВЫЙ ЧАТ] Поступил новый отклик: {cand_name} (чат {cid}, создан: {chat_created})", flush=True)
                 
             item_ctx = c.get('context', {}).get('value', {})
             item_title = item_ctx.get('title', '')
@@ -999,21 +1000,29 @@ def check_and_reply_valeria():
             msgs = list(reversed(raw_msgs))
             handled = process_valeria_chat(cid, cand_name, item_title, msgs, item_id=item_id, item_url=item_url)
             if handled:
+                replied_any = True
                 time.sleep(1)
-        return True
+        return replied_any
             
     except Exception as e:
-        print(f"Ошибка проверки: {e}")
+        print(f"Ошибка проверки: {e}", flush=True)
+        import traceback
+        traceback.print_exc()
     return False
 
 if __name__ == "__main__":
-    print(f"\n🚀 AI-Рекрутер GSM Logistics запущен в режиме КАБИНЕТА 'Прямой работодатель' (ID: {AVITO_USER_ID})!")
-    print("🎯 Ассистент строго привязывается к объявлению отклика, дает точные условия и передает код вакансии в CRM.\n")
+    print(f"\n🚀 AI-Рекрутер GSM Logistics запущен в режиме КАБИНЕТА 'Прямой работодатель' (ID: {AVITO_USER_ID})!", flush=True)
+    print("🎯 Ассистент строго привязывается к объявлению отклика, дает точные условия и передает код вакансии в CRM.\n", flush=True)
     
     poll_count = 0
     while True:
-        poll_count += 1
-        found = check_and_reply_valeria()
-        if not found and poll_count % 4 == 0:
-            print(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] Ожидание входящих откликов на Авито... (проверено {poll_count} раз)")
+        try:
+            poll_count += 1
+            found = check_and_reply_valeria()
+            if not found and poll_count % 6 == 0:
+                print(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] Ожидание новых входящих откликов на Авито... (проверено {poll_count} раз)", flush=True)
+        except Exception as e:
+            print(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] Ошибка в цикле опроса: {e}", flush=True)
+            import traceback
+            traceback.print_exc()
         time.sleep(10)
