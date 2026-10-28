@@ -474,8 +474,8 @@ def generate_human_reply(cand_text: str, ad_title: str, cand_history_only: str =
     # =========================================================================
     # 7. СТАНДАРТНАЯ КВАЛИФИКАЦИЯ (ЕСЛИ ВОПРОСОВ НЕТ)
     # =========================================================================
-    cand_tokens = len(combined_cand.split())
-    if not (known_age or known_cit or known_city) and cand_tokens <= 3:
+    # Первое касание (первое сообщение кандидата в диалоге)
+    if not cand_history_only and not (known_age or known_cit or known_city):
         return fac["intro"], False, ""
 
     # Если уже известны возраст, гражданство и город/дата -> запрашиваем номер
