@@ -615,9 +615,9 @@ def sync_candidate_to_b24_deal(chat_id: str, cand_data: dict, is_disqualified: b
 
             # Новая сделка — распределяем дежурного рекрутера по очереди
             responsible_id = get_next_recruiter_id()
-            facility_name = extract_facility_name(text=vacancy, comments="")
-            proj_enum = get_project_enum_id(facility_name, vacancy)
-            is_vahta = "вахт" in (vacancy or "").lower()
+            facility_name = cand_data.get('facility') or extract_facility_name(text=vacancy, comments="")
+            proj_enum = cand_data.get('project_enum') or get_project_enum_id(facility_name, vacancy)
+            is_vahta = "вахт" in (vacancy or "").lower() or "вахт" in (facility_name or "").lower()
             
             parts = [f"[{facility_name}]"]
             if is_disqualified:
@@ -653,6 +653,8 @@ def sync_candidate_to_b24_deal(chat_id: str, cand_data: dict, is_disqualified: b
                 'UF_CRM_1770280572875': f"https://www.avito.ru/profile/messenger/channel/{chat_id}",
                 'UF_CRM_1775470003043': facility_name,
                 'UF_CRM_1768815865773': proj_enum,
+                'UF_CRM_1768817930019': cand_data.get('vacancy', ''),
+                'UF_CRM_1768819383825': cand_data.get('vacancy_url', ''),
                 'UF_CRM_1768816011673': name or '',
                 'UF_CRM_1768816356722': str(age) if age else ''
             }
@@ -734,8 +736,8 @@ def sync_candidate_to_b24_deal(chat_id: str, cand_data: dict, is_disqualified: b
 
         comm = current_deal.get('COMMENTS', '') if current_deal else ''
         existing_obj = current_deal.get('UF_CRM_1775470003043', '') if current_deal else ''
-        facility_name = extract_facility_name(text=existing_obj or vacancy, comments=comm)
-        proj_enum = get_project_enum_id(facility_name, vacancy)
+        facility_name = cand_data.get('facility') or extract_facility_name(text=existing_obj or vacancy, comments=comm)
+        proj_enum = cand_data.get('project_enum') or get_project_enum_id(facility_name, vacancy)
 
         upd_fields = {}
         if name and not current_deal.get('UF_CRM_1768816011673'):
@@ -746,6 +748,10 @@ def sync_candidate_to_b24_deal(chat_id: str, cand_data: dict, is_disqualified: b
         # Поле ПРОЕКТ заполняется ВСЕГДА автоматически
         upd_fields['UF_CRM_1775470003043'] = facility_name
         upd_fields['UF_CRM_1768815865773'] = proj_enum
+        if cand_data.get('vacancy') and not current_deal.get('UF_CRM_1768817930019'):
+            upd_fields['UF_CRM_1768817930019'] = cand_data.get('vacancy')
+        if cand_data.get('vacancy_url') and not current_deal.get('UF_CRM_1768819383825'):
+            upd_fields['UF_CRM_1768819383825'] = cand_data.get('vacancy_url')
 
         # Поле НАПРАВЛЕН (96: На смену, 98: На заселение) исходя из стадий "В работе ВАХТА" или "В работе МЕСТНЫЕ"
         is_deal_vahta = (
