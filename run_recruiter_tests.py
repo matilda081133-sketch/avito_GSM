@@ -27,7 +27,7 @@ class TestResult:
             self.passed = False
         self.steps.append((step_name, condition, details))
 
-def run_dialogue(dialogue_name: str, vacancy_title: str, turns: list) -> TestResult:
+def run_dialogue(dialogue_name: str, vacancy_title: str, turns: list, deal_id: str = "", deal_stage: str = "") -> TestResult:
     res = TestResult(dialogue_name)
     cand_history = []
     our_history = []
@@ -40,7 +40,9 @@ def run_dialogue(dialogue_name: str, vacancy_title: str, turns: list) -> TestRes
             cand_text=cand_input,
             ad_title=vacancy_title,
             cand_history_only=cand_hist_str,
-            our_history=our_hist_str
+            our_history=our_hist_str,
+            deal_id=deal_id,
+            deal_stage=deal_stage
         )
 
         cand_history.append(cand_input)
@@ -221,6 +223,46 @@ def main():
     )
     suites.append(t8)
 
+    # -------------------------------------------------------------------------
+    # ТЕСТ 9: Звонок рекрутера состоялся -> ссылка на МАКС с меткой и инструкцией
+    # -------------------------------------------------------------------------
+    t9 = run_dialogue(
+        "9. Звонок рекрутера состоялся -> генерация ссылки в МАКС (АБИ)",
+        "Рабочий на пищевое производство вахта",
+        [
+            ("Мне только что позвонил менеджер, сказал написать вам насчет паспорта и билетов", {
+                "Формирование ссылки на МАКС с меткой объекта и сделки": lambda r, d, re: "max.ru/id9729371578_bot?start=abi_778899" in r,
+                "Пояснение про чат с бригадиром": lambda r, d, re: "бригадир" in r.lower(),
+                "Пояснение про фото паспорта и пропуск на КПП": lambda r, d, re: "пропуск" in r.lower() and "паспорт" in r.lower(),
+                "Пояснение про покупку билета": lambda r, d, re: "билет" in r.lower(),
+                "Не дисквалифицирован": lambda r, d, re: not d
+            }),
+            ("А куда скидывать фото?", {
+                "Повторное напоминание со ссылкой выше": lambda r, d, re: "max.ru" in r and "выше" in r.lower()
+            })
+        ],
+        deal_id="778899",
+        deal_stage="UC_REQ_PASSPORT"
+    )
+    suites.append(t9)
+
+    # -------------------------------------------------------------------------
+    # ТЕСТ 10: Звонок рекрутера по объекту Тепофол -> метка tepofol в МАКС
+    # -------------------------------------------------------------------------
+    t10 = run_dialogue(
+        "10. Генерация ссылки в МАКС для другого объекта (Тепофол Кашира)",
+        "Упаковщик утеплителя Тепофол Кашира вахта",
+        [
+            ("Со мной связался рекрутер, куда скинуть фото паспорта?", {
+                "Метка tepofol в ссылке": lambda r, d, re: "max.ru/id9729371578_bot?start=tepofol_334455" in r,
+                "Упоминание бригадира и КПП": lambda r, d, re: "бригадир" in r.lower() and "кпп" in r.lower()
+            })
+        ],
+        deal_id="334455",
+        deal_stage="UC_G0AG7S"
+    )
+    suites.append(t10)
+
     # Вывод результатов
     all_passed = True
     print()
@@ -236,7 +278,7 @@ def main():
         print("-" * 80)
 
     if all_passed:
-        print("\n🎉 ВСЕ ТЕСТЫ (8 СЦЕНАРИЕВ, 23 ПРОВЕРКИ) ПРОЙДЕНЫ НА 100% УСПЕШНО!")
+        print(f"\n🎉 ВСЕ ТЕСТЫ ({len(suites)} СЦЕНАРИЕВ, {sum(len(s.steps) for s in suites)} ПРОВЕРОК) ПРОЙДЕНЫ НА 100% УСПЕШНО!")
     else:
         print("\n⚠️ ОБНАРУЖЕНЫ СБОИ В ТЕСТАХ! См. детали выше.")
 

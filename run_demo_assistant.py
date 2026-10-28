@@ -99,6 +99,58 @@ def detect_facility(text: str) -> str:
         return "SMART_LOCAL"
     return "ABI"
 
+FACILITY_TAGS = {
+    "ABI": "abi",
+    "TEPOFOL": "tepofol",
+    "SMART_LOCAL": "smart",
+    "ALFA": "alfa"
+}
+
+def get_max_bot_link(facility_key: str = "ABI", deal_id: str = "") -> str:
+    """Генерирует короткую ссылку на чат-бота в МАКС с меткой объекта и сделки."""
+    tag = FACILITY_TAGS.get(facility_key, "abi")
+    if deal_id:
+        return f"https://max.ru/id9729371578_bot?start={tag}_{deal_id}"
+    return f"https://max.ru/id9729371578_bot?start={tag}"
+
+def find_b24_deal_for_chat(chat_id: str):
+    """Ищет сделку в Bitrix24 по привязке к чату Авито."""
+    if not chat_id:
+        return None
+    try:
+        from b24_sync import call_b24
+        deals = call_b24('crm.deal.list', {
+            'filter': {'%UF_CRM_1770280572875': chat_id},
+            'select': ['ID', 'TITLE', 'STAGE_ID', 'CATEGORY_ID', 'ASSIGNED_BY_ID', 'UF_CRM_1775470003043'],
+            'order': {'ID': 'DESC'}
+        }).get('result', [])
+        if deals:
+            return deals[0]
+    except Exception:
+        pass
+    return None
+
+def generate_max_invite_reply(facility_key: str = "ABI", deal_id: str = "", cand_name: str = "Валерия", already_sent: bool = False) -> str:
+    """Генерирует официальное приглашение в чат-бот МАКС с deeplink-меткой объекта и сделки."""
+    link = get_max_bot_link(facility_key, deal_id)
+    name_str = f"{cand_name}, " if cand_name else ""
+    if already_sent:
+        return (
+            f"{name_str}ссылка на наш официальный чат-бот в МАКС направлена выше:\n"
+            f"👉 {link}\n\n"
+            f"Переходите по ней и нажмите «Начать» — бот сразу примет фото паспорта для пропуска на КПП завода и покупки билета за счет компании, а также подключит вас к чату с бригадиром!"
+        )
+    return (
+        f"{name_str}отлично, что вы уже на связи с координатором! 🤝\n\n"
+        f"Чтобы завершить оформление, переходите в наш официальный чат-бот в МАКС:\n"
+        f"👉 {link}\n\n"
+        f"В МАКС мы сразу:\n"
+        f"1. Добавим вас в рабочий чат с бригадиром на объекте;\n"
+        f"2. Безопасно примем фото паспорта (разворот с фото и страницу прописки) — это нужно службе безопасности для заказа разового электронного пропуска на КПП завода и покупки билета за счет компании;\n"
+        f"3. Отправим вам электронный билет на поезд/автобус и памятку со схемой проезда и контактами встречи.\n\n"
+        f"Жмите на ссылку и отправьте боту «Начать» — он сразу всё зафиксирует!"
+    )
+
 def extract_phone_number(text: str) -> str:
     if not text:
         return ""
@@ -182,7 +234,7 @@ def extract_ready_date(text: str) -> str:
             return w
     return ""
 
-def generate_human_reply(cand_text: str, ad_title: str, cand_history_only: str = "", our_history: str = "") -> tuple:
+def generate_human_reply(cand_text: str, ad_title: str, cand_history_only: str = "", our_history: str = "", deal_id: str = "", deal_stage: str = "") -> tuple:
     """
     Генерирует живой человеческий ответ с полным учетом истории диалога,
     строго следуя верным условиям и последовательной логике квалификации.
@@ -278,6 +330,22 @@ def generate_human_reply(cand_text: str, ad_title: str, cand_history_only: str =
             f"Валерия, номер {phone} записала, передаю нашему координатору объекта!\n\n"
             "В ближайшее время он наберет вас, ответит на все бытовые вопросы и согласует покупку билета и заселение. До связи!"
         )
+        return reply, False, ""
+
+    # =========================================================================
+    # 5.5. КАНДИДАТ УЖЕ В РАБОТЕ У РЕКРУТЕРА / ЗВОНОК СОСТОЯЛСЯ / ЗАПРОС В МАКС
+    # =========================================================================
+    is_recruiter_called = any(k in t for k in [
+        "позвонил", "позвонила", "звонил", "звонила", "набрал", "набрали",
+        "созвонил", "связал", "поговорил", "сказали написать сюда", "дали добро",
+        "согласовали", "куда паспорт", "куда скинуть паспорт", "куда фото паспорта",
+        "куда документы", "куда скидывать", "куда отправить", "что дальше делать",
+        "что дальше", "в макс", "ссылк на бот", "чат с бригадир", "как получить билет"
+    ]) or (deal_stage in ["UC_REQ_PASSPORT", "UC_ITCFIF", "PREPAYMENT_INVOICE", "UC_G0AG7S", "PREPARATION"] and any(k in t for k in ["паспорт", "фото", "скинуть", "отправить", "дальше", "билет", "макс", "бригадир"]))
+
+    if is_recruiter_called:
+        already_sent = "max.ru" in our_history
+        reply = generate_max_invite_reply(fac_key, deal_id, cand_name="Валерия", already_sent=already_sent)
         return reply, False, ""
 
     # Квалификационные параметры (из всей истории кандидата)
@@ -512,7 +580,23 @@ def generate_human_reply(cand_text: str, ad_title: str, cand_history_only: str =
 
 def process_valeria_chat(chat_id: str, cand_name: str, item_title: str, msgs: list) -> bool:
     last_msg = msgs[-1]
+    deal = find_b24_deal_for_chat(chat_id)
+    deal_id = str(deal.get("ID", "")) if deal else ""
+    deal_stage = str(deal.get("STAGE_ID", "")) if deal else ""
+
+    # Проактивная отправка ссылки в МАКС, если рекрутер уже созвонился и перевел сделку в запрос паспорта/направление
     if last_msg.get('author_id') == AVITO_USER_ID:
+        if deal_stage in ['UC_REQ_PASSPORT', 'UC_ITCFIF', 'PREPAYMENT_INVOICE']:
+            has_max_sent = any("max.ru" in m.get('content', {}).get('text', '') for m in msgs[-5:] if m.get('author_id') == AVITO_USER_ID)
+            if not has_max_sent:
+                fac_key = detect_facility(item_title)
+                proactive_text = generate_max_invite_reply(fac_key, deal_id, cand_name=cand_name or "Валерия", already_sent=False)
+                print(f"\n[{datetime.datetime.now().strftime('%H:%M:%S')}] 🚀 ПРОАКТИВНАЯ ОТПРАВКА ССЫЛКИ В МАКС (стадия CRM: {deal_stage}):")
+                print(proactive_text)
+                res = client.send_message(chat_id, proactive_text)
+                print(f"✅ Отправлено в Авито! ID: {res.get('id', 'ok')}")
+                client.mark_chat_as_read(chat_id)
+                return True
         return False
 
     valeria_text = last_msg.get('content', {}).get('text', '').strip()
@@ -556,7 +640,9 @@ def process_valeria_chat(chat_id: str, cand_name: str, item_title: str, msgs: li
         cand_text=valeria_text,
         ad_title=item_title,
         cand_history_only=cand_history_only,
-        our_history=our_history
+        our_history=our_history,
+        deal_id=deal_id,
+        deal_stage=deal_stage
     )
 
     if is_explicit_restart and not reply_text.startswith("Здравствуйте"):

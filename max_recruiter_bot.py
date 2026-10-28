@@ -463,6 +463,60 @@ def handle_direct_dialog(user_id: int, text, attachments: list, state: dict):
     text_clean = str(text or "").strip()
     text_lower = text_clean.lower()
 
+    # 0. Разбор параметров deeplink (/start tag_dealid или /start tag)
+    start_match = re.search(r'(?:/start|start=|start\s+)\s*([a-zA-Z0-9_]+)', text_clean, re.IGNORECASE)
+    if start_match:
+        param = start_match.group(1).lower()
+        parts = param.split('_')
+        tag = parts[0]
+        linked_deal_id = parts[1] if len(parts) > 1 and parts[1].isdigit() else None
+        
+        TAG_TO_FACILITY = {
+            "abi": ("АБИ Владимир", "120"),
+            "tepofol": ("Тепофол Кашира", "3056"),
+            "smart": ("Смарт Балашиха", None),
+            "alfa": ("Склад автозапчастей Подольск", "3108"),
+            "arnika": ("Арника Раменское", "3062"),
+            "farma": ("Фарма Цвет Опалиха", "3060"),
+            "beauty": ("Бьюти Лайф Москва", "3104")
+        }
+        
+        if tag in TAG_TO_FACILITY:
+            fac_name, enum_id = TAG_TO_FACILITY[tag]
+            session["facility"] = fac_name
+            if enum_id:
+                session["facility_enum"] = enum_id
+        if linked_deal_id:
+            session["deal_id"] = linked_deal_id
+            try:
+                deal_info = b24_sync.call_b24('crm.deal.get', {'id': linked_deal_id}).get('result')
+                if deal_info:
+                    cid = deal_info.get('CONTACT_ID')
+                    if cid:
+                        c_info = b24_sync.call_b24('crm.contact.get', {'id': cid}).get('result', {})
+                        phones_c = c_info.get('PHONE', [])
+                        if phones_c and isinstance(phones_c, list) and phones_c[0].get('VALUE'):
+                            session["phone"] = phones_c[0].get('VALUE')
+            except Exception as e:
+                print(f"[MAX BOT] Error fetching deal {linked_deal_id}: {e}", flush=True)
+        save_state(state)
+
+        fac_name = session.get("facility", "АБИ Владимир")
+        reply = (
+            f"Здравствуйте! Рады приветствовать вас! 🤝\n\n"
+            f"Вы откликнулись на вахту: **{fac_name}**.\n"
+            f"Ваша заявка уже в работе у координатора.\n\n"
+            f"Сейчас мы:\n"
+            f"1. Добавляем вас в рабочий чат с бригадиром на объекте;\n"
+            f"2. Оформляем электронный разовый пропуск на КПП завода и заказываем бесплатный билет на поезд/автобус.\n\n"
+            f"📸 Пожалуйста, отправьте прямо сюда в чат **фото главной страницы паспорта** (разворот с фото и страницу прописки).\n\n"
+            f"🔒 Ваши данные строго конфиденциальны, защищены законом 152-ФЗ и используются исключительно службой безопасности объекта для пропуска и покупки билета."
+        )
+        send_max_message(user_id=user_id, text=reply)
+        session["step"] = "AWAITING_PASSPORT"
+        save_state(state)
+        return
+
     # 1. Извлечение телефона, если кандидат прислал его
     phones = extract_phones(text_clean)
     new_phone_provided = False
