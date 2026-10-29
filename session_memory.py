@@ -79,7 +79,9 @@ def get_session_profile(chat_id: str) -> Dict[str, Any]:
         "raw_metadata": row[12] or "{}"
     }
 
-def update_session_profile(chat_id: str, **kwargs) -> Dict[str, Any]:
+def update_session_profile(chat_id: str = None, **kwargs) -> Dict[str, Any]:
+    if chat_id is None:
+        chat_id = kwargs.pop('chat_id', None)
     """Обновляет заполненные слоты кандидата в SQLite."""
     current = get_session_profile(chat_id)
     for k, v in kwargs.items():

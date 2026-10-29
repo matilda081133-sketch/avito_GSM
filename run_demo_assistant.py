@@ -1206,7 +1206,7 @@ def process_valeria_chat(chat_id: str, cand_name: str, item_title: str, msgs: li
         profile["origin_city"] = city_found
 
     # Сохраняем обновленный профиль сессии
-    update_session_profile(chat_id, **profile)
+    update_session_profile(**profile)
 
     # Историю кандидата и историю бота берем строго из АКТИВНОЙ сессии
     cand_msgs = [m.get('content', {}).get('text', '') for m in active_msgs if m.get('author_id') != AVITO_USER_ID and m.get('author_id') != 0]
