@@ -127,6 +127,51 @@ def test_gemini_endpoint():
             })
     return diag
 
+@app.post("/avito-webhook")
+async def avito_webhook(request: Request):
+    """
+    Высокоскоростной входящий Webhook от Avito Messenger API V2.
+    Реакция на входящие сообщения соискателей за ~1-2 секунды (Kupibilet / Tinkoff standard).
+    """
+    try:
+        data = await request.json()
+        payload = data.get("payload", {}).get("value", {})
+        chat_id = payload.get("chat_id")
+        user_id = payload.get("user_id")
+        text_content = payload.get("content", {}).get("text", "")
+        author_id = payload.get("author_id")
+
+        if not chat_id or not text_content:
+            return {"status": "ignored", "reason": "empty"}
+
+        # Игнорируем собственные сообщения
+        if author_id == AVITO_USER_ID:
+            return {"status": "ok", "reason": "self"}
+
+        print(f"[AVITO WEBHOOK] Входящее сообщение в чате {chat_id}: '{text_content[:60]}...'", flush=True)
+
+        # Запускаем обработку в фоновом потоке, чтобы сразу вернуть HTTP 200 Авито
+        def handle_async():
+            try:
+                from run_demo_assistant import client, process_valeria_chat
+                chat_info = client.get_chat_messages(chat_id)
+                # Получаем метаданные чата
+                raw_chats = client.get_chats(unread_only=False)
+                c_item = next((c for c in raw_chats if c.get("id") == chat_id), {})
+                c_title = c_item.get("context", {}).get("value", {}).get("title", "")
+                c_user = c_item.get("users", [{}])[0].get("name", "Кандидат")
+                
+                msgs = list(reversed(chat_info))
+                process_valeria_chat(chat_id, c_user, c_title, msgs)
+            except Exception as e_proc:
+                print(f"[AVITO WEBHOOK ERROR] Ошибка обработки: {e_proc}", flush=True)
+
+        threading.Thread(target=handle_async, daemon=True).start()
+        return {"status": "ok", "chat_id": chat_id}
+    except Exception as e:
+        print(f"[AVITO WEBHOOK FATAL] {e}", flush=True)
+        return {"status": "error", "error": str(e)}
+
 @app.post("/max-webhook")
 async def max_webhook(request: Request):
     """

@@ -23,6 +23,7 @@ from config import AVITO_CLIENT_ID, AVITO_CLIENT_SECRET, AVITO_USER_ID
 from b24_sync import sync_candidate_to_b24_deal
 from llm_recruiter import generate_llm_reply
 from learning_system import match_learned_rule
+from session_memory import get_session_profile, update_session_profile, reset_session_profile
 
 client = AvitoClient(AVITO_CLIENT_ID, AVITO_CLIENT_SECRET, AVITO_USER_ID)
 
@@ -484,7 +485,7 @@ def extract_ready_date(text: str) -> str:
             return w
     return ""
 
-def generate_human_reply(cand_text: str, ad_title: str, cand_history_only: str = "", our_history: str = "", deal_id: str = "", deal_stage: str = "", cand_name: str = "", dialogue_transcript: str = "") -> tuple:
+def generate_human_reply(cand_text: str, ad_title: str, cand_history_only: str = "", our_history: str = "", deal_id: str = "", deal_stage: str = "", cand_name: str = "", dialogue_transcript: str = "", profile: dict = None) -> tuple:
     """
     Интеллектуальный генератор диалога: гибкий, эмпатичный, контекстно-зависимый.
     Понимает подбор для третьих лиц (муж, сын, брат), исправляет неточности,
@@ -519,7 +520,8 @@ def generate_human_reply(cand_text: str, ad_title: str, cand_history_only: str =
             cand_history=cand_history_only,
             our_history=our_history,
             cand_name=cand_first_name,
-            dialogue_transcript=dialogue_transcript
+            dialogue_transcript=dialogue_transcript,
+            profile=profile
         )
         if llm_reply and len(llm_reply.strip()) > 5:
             is_disq = False
@@ -1153,12 +1155,49 @@ def process_valeria_chat(chat_id: str, cand_name: str, item_title: str, msgs: li
 
     if is_explicit_restart:
         active_msgs = [last_msg]
+        reset_session_profile(chat_id)
         print("🔄 Обнаружена команда полного сброса диалога! Начинаем с чистого листа.")
     elif last_close_idx != -1:
         active_msgs = msgs[last_close_idx + 1:]
         print(f"🔄 Предыдущая сессия была закрыта. Начинаем новую сессию (активных сообщений: {len(active_msgs)}).")
     else:
         active_msgs = msgs
+
+    # СЛОТОВАЯ ПАМЯТЬ СЕССИИ (Kupibilet / Tinkoff architecture)
+    profile = get_session_profile(chat_id)
+    profile["candidate_name"] = cand_name or profile.get("candidate_name", "")
+
+    # Динамическое извлечение и закрепление слотов
+    t_cand_lower = valeria_text.lower()
+    is_neg_h = any(w in t_cand_lower for w in ["какой муж", "не муж", "не для мужа", "причем тут муж", "чей муж"])
+    if is_neg_h:
+        profile["target_subject"] = "кандидат"
+
+    if any(w in t_cand_lower for w in ["брат", "брата", "брату", "братишка"]):
+        profile["target_subject"] = "брат"
+    elif any(w in t_cand_lower for w in ["сын", "сына", "сыну"]):
+        profile["target_subject"] = "сын"
+    elif not is_neg_h and any(w in t_cand_lower for w in ["мужа", "мужу", "муж поедет", "для мужа"]):
+        profile["target_subject"] = "муж"
+
+    age_found = extract_age(valeria_text)
+    if age_found:
+        profile["age"] = age_found
+
+    cit_found = extract_citizenship(valeria_text)
+    if cit_found:
+        profile["has_rf_passport"] = (cit_found == "РФ")
+
+    phone_found = extract_phone_number(valeria_text)
+    if phone_found:
+        profile["phone_number"] = phone_found
+
+    city_found = extract_city(valeria_text)
+    if city_found:
+        profile["origin_city"] = city_found
+
+    # Сохраняем обновленный профиль сессии
+    update_session_profile(chat_id, **profile)
 
     # Историю кандидата и историю бота берем строго из АКТИВНОЙ сессии
     cand_msgs = [m.get('content', {}).get('text', '') for m in active_msgs if m.get('author_id') != AVITO_USER_ID and m.get('author_id') != 0]
@@ -1183,7 +1222,8 @@ def process_valeria_chat(chat_id: str, cand_name: str, item_title: str, msgs: li
         deal_id=deal_id,
         deal_stage=deal_stage,
         cand_name=cand_name,
-        dialogue_transcript=full_transcript
+        dialogue_transcript=full_transcript,
+        profile=profile
     )
 
     if is_explicit_restart and not reply_text.startswith("Здравствуйте"):

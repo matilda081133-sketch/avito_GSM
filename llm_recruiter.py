@@ -83,7 +83,8 @@ def generate_llm_reply(
     cand_history: str = "",
     our_history: str = "",
     cand_name: str = "",
-    dialogue_transcript: str = ""
+    dialogue_transcript: str = "",
+    profile: dict = None
 ) -> Optional[str]:
     api_key = get_api_key()
     if not api_key:
@@ -105,14 +106,31 @@ def generate_llm_reply(
             history_parts.append(f"Сообщения кандидата ранее:\n{cand_history}")
         dialogue_block = "\n\n".join(history_parts)
 
+    profile_block = ""
+    if profile:
+        subj = profile.get("target_subject", "кандидат").upper()
+        age_str = f"{profile.get('age')} лет" if profile.get('age') else "Уточняется"
+        cit_str = "Да (подтверждено)" if profile.get('has_rf_passport') is True else ("Нет (не гражданин РФ)" if profile.get('has_rf_passport') is False else "Уточняется")
+        city_str = profile.get("origin_city") or "Уточняется"
+        phone_str = profile.get("phone_number") or "Не указан (нужно запросить для брони)"
+        profile_block = (
+            f"СТРУКТУРИРОВАННАЯ КАРТОЧКА КАНДИДАТА (SESSION PROFILE):\n"
+            f"• ДЛЯ КОГО ИЩЕТ РАБОТУ: {subj} (СТРОГО! Никогда не путай и не называй другим лицом!)\n"
+            f"• ВОЗРАСТ: {age_str}\n"
+            f"• ГРАЖДАНСТВО РФ: {cit_str}\n"
+            f"• ГОРОД ВЫЕЗДА: {city_str}\n"
+            f"• КОНТАКТНЫЙ ТЕЛЕФОН: {phone_str}\n\n"
+        )
+
     user_prompt = (
         f"{facility_context}\n\n"
+        f"{profile_block}"
         f"{dialogue_block}\n\n"
         f"ИМЯ СОБЕСЕДНИКА: {cand_name or 'Собеседник'}\n"
         f"САМОЕ СВЕЖЕЕ СООБЩЕНИЕ ОТ КАНДИДАТА: \"{cand_text}\"\n\n"
         f"Напиши естественный, умный, чуткий ответ соискателю от лица рекрутера прямого работодателя. "
-        f"Если кандидат внес уточнение или поправил нас (например, что ищет для брата, а не для мужа, или что возраст 25) — "
-        f"мгновенно и вежливо подстройся. Ответ держи в пределах 1-3 предложений."
+        f"Если кандидат внес уточнение или поправил нас — мгновенно и вежливо подстройся. "
+        f"Ответ держи в пределах 1-3 предложений (до 350-400 символов)."
     )
 
     learned_rules_text = get_learned_rules_for_prompt()
