@@ -97,25 +97,35 @@ def healthcheck():
 
 @app.get("/test-gemini")
 def test_gemini_endpoint():
-    """Тестовый эндпоинт для мгновенной проверки работы Gemini LLM из облака Render."""
-    try:
-        from llm_recruiter import generate_llm_reply
-        test_history = "Кандидат: Здравствуйте, ищу работу на вахту\nАссистент: Здравствуйте! Подбираем для вашего мужа?\nКандидат: Какой муж? Я брату хочу работу найти, ему 25, паспорт РФ"
-        reply = generate_llm_reply(
-            cand_text="Какой муж? Я брату хочу работу найти, ему 25, паспорт РФ",
-            ad_title="Разнорабочий на пищевое производство (вахта)",
-            facility_info={"title": "АБИ Владимир"},
-            dialogue_transcript=test_history
-        )
-        return {
-            "status": "ok",
-            "reply": reply
-        }
-    except Exception as e:
-        return {
-            "status": "error",
-            "error": str(e)
-        }
+    """Тестовый эндпоинт для мгновенной диагностики вызова Gemini LLM из облака Render."""
+    import requests
+    from llm_recruiter import get_api_key
+    api_key = get_api_key()
+    diag = {
+        "has_api_key": bool(api_key),
+        "key_len": len(api_key) if api_key else 0,
+        "key_prefix": api_key[:6] if api_key else "",
+        "attempts": []
+    }
+    models = ["gemini-2.5-flash-lite", "gemini-flash-latest", "gemini-3.1-flash-lite", "gemini-3.5-flash-lite", "gemini-2.5-flash"]
+    for m in models:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent?key={api_key}"
+        try:
+            r = requests.post(url, json={"contents": [{"parts": [{"text": "Ответь одним словом: Работает"}]}]}, timeout=5)
+            diag["attempts"].append({
+                "model": m,
+                "status": r.status_code,
+                "resp": r.text[:200]
+            })
+            if r.status_code == 200:
+                diag["working_model"] = m
+                break
+        except Exception as e:
+            diag["attempts"].append({
+                "model": m,
+                "error": str(e)
+            })
+    return diag
 
 @app.post("/max-webhook")
 async def max_webhook(request: Request):
