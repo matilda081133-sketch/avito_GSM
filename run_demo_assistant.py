@@ -407,15 +407,19 @@ def extract_age(text: str) -> int:
     if not text:
         return 0
     t = text.lower()
-    m = re.search(r'\b(\d{1,2})\s*(?:лет|год|года|л\b)', t)
-    if m:
-        return int(m.group(1))
-    m2 = re.search(r'\bмне\s*(\d{1,2})\b', t)
-    if m2:
-        return int(m2.group(1))
-    m3 = re.search(r'\b(1[4-9]|[2-6]\d)\b', t)
-    if m3:
-        return int(m3.group(1))
+    # Ищем все совпадения и берем ПОСЛЕДНЕЕ актуальное указание возраста (справа налево)
+    matches_kw = re.findall(r'\b(?:брату|мужу|сыну|мне|ему|возраст)?\s*(\d{1,2})\s*(?:лет|год|года|л\b)', t)
+    if matches_kw:
+        for m in reversed(matches_kw):
+            val = int(m)
+            if 14 <= val <= 75:
+                return val
+    matches_num = re.findall(r'\b(1[4-9]|[2-6]\d)\b', t)
+    if matches_num:
+        for m in reversed(matches_num):
+            val = int(m)
+            if 14 <= val <= 75:
+                return val
     return 0
 
 def extract_citizenship(text: str) -> str:
@@ -506,17 +510,35 @@ def generate_human_reply(cand_text: str, ad_title: str, cand_history_only: str =
     # =========================================================================
     # 0. ОПРЕДЕЛЕНИЕ СУБЪЕКТА: ПОДБОР ДЛЯ МУЖА / СЫНА / БРАТА / РОДСТВЕННИКА
     # =========================================================================
-    for_husband = any(w in combined_cand for w in [
-        "муж", "мужа", "мужу", "записать мужа", "устроить мужа", "муж поедет", "мужа своего",
-        "для мужа", "подбираю мужу", "ищу мужу", "не мне а мужу", "не мне, а мужу"
-    ])
-    for_son = any(w in combined_cand for w in ["для сына", "сыну", "записать сына", "сын поедет", "сына своего"])
-    for_brother = any(w in combined_cand for w in ["для брата", "брату", "записать брата", "брат поедет"])
-    for_other_male = for_husband or for_son or for_brother or ("не мне" in combined_cand and "мужу" in combined_cand)
+    # Определяем, для кого подбирается работа по ПОСЛЕДНИМ сообщениям кандидата
+    is_neg_husband = any(w in t for w in ["какой муж", "не муж", "не для мужа", "причем тут муж", "чей муж"])
+    
+    # Проверяем упоминания от свежих к старым
+    cand_msgs_rev = list(reversed([m.strip().lower() for m in cand_history_only.split("\n") if m.strip()]))
+    all_recent_cand = [t] + cand_msgs_rev
+    
+    for_brother = False
+    for_son = False
+    for_husband = False
+    
+    for msg_c in all_recent_cand:
+        if any(w in msg_c for w in ["брат", "брата", "брату", "братишка"]):
+            for_brother = True
+            break
+        if any(w in msg_c for w in ["сын", "сына", "сыну"]):
+            for_son = True
+            break
+        if not is_neg_husband and any(w in msg_c for w in ["мужа", "мужу", "муж поедет", "для мужа", "подбираю мужу", "ищу мужу"]):
+            for_husband = True
+            break
 
-    proxy_target = "мужу" if for_husband else ("сыну" if for_son else ("брату" if for_brother else "кандидату"))
-    proxy_target_nom = "муж" if for_husband else ("сын" if for_son else ("брат" if for_brother else "он"))
-    proxy_target_gen = "мужа" if for_husband else ("сына" if for_son else ("брата" if for_brother else "его"))
+    if is_neg_husband:
+        for_husband = False
+        
+    for_other_male = for_brother or for_son or for_husband
+    proxy_target = "брату" if for_brother else ("сыну" if for_son else ("мужу" if for_husband else "кандидату"))
+    proxy_target_nom = "брат" if for_brother else ("сын" if for_son else ("муж" if for_husband else "он"))
+    proxy_target_gen = "брата" if for_brother else ("сына" if for_son else ("мужа" if for_husband else "его"))
 
     # =========================================================================
     # 0.1. ПРОВЕРКА ПО БАЗЕ САМООБУЧЕНИЯ (ГРАЖДАНСТВО, ИНОСТРАННЫЕ НОМЕРА / ГОРОДА, СЛОЖНЫЕ КЕЙСЫ)
@@ -536,14 +558,15 @@ def generate_human_reply(cand_text: str, ad_title: str, cand_history_only: str =
         )
         return reply, True, reason
 
-    age = extract_age(combined_cand)
+    # Возраст извлекаем ПЕРВООЧЕРЕДНО из последнего сообщения, чтобы не брать старый возраст из истории!
+    age = extract_age(cand_text) or extract_age(combined_cand)
     if age:
-        if age < 20:
-            reason = f"Возраст {age}л (до 20 лет не принимаем)"
+        if age <= 18:
+            reason = f"Возраст {age}л (до 19 лет не принимаем)"
             reply = (
                 f"{name_prefix}к сожалению, служба безопасности производственных предприятий согласовывает пропуска "
-                f"строго для кандидатов в возрасте от 20 до 55 лет. В {age} лет согласование не проходит, поэтому принять мы не сможем.\n\n"
-                f"Будем искренне рады видеть вас в нашей команде, как только вам исполнится 20 лет!"
+                f"строго для кандидатов от 19 до 55 лет. В {age} лет согласование не проходит, поэтому принять мы не сможем.\n\n"
+                f"Будем искренне рады видеть вас в нашей команде, как только исполнится 19 лет!"
             )
             return reply, True, reason
         elif age > 55:
@@ -679,9 +702,9 @@ def generate_human_reply(cand_text: str, ad_title: str, cand_history_only: str =
         if "прошу прощения" in last_bot or "поняла вас" in last_bot:
             apology = f"{name_prefix}да, извините! Имею в виду именно возраст мужа — "
         elif is_annoyed:
-            apology = f"{name_prefix}прошу прощения за невнимательность! Конечно, подбираем работу для вашего мужа. "
+            apology = f"{name_prefix}прошу прощения за невнимательность! Конечно, подбираем работу для вашего {proxy_target_gen}. "
         else:
-            apology = f"{name_prefix}поняла вас — подбираем для мужа, отличный вариант! "
+            apology = f"{name_prefix}поняла вас — подбираем для {proxy_target_gen}, отличный вариант! "
 
         followup = get_qual_followup()
         if apology.endswith("— "):
@@ -694,7 +717,7 @@ def generate_human_reply(cand_text: str, ad_title: str, cand_history_only: str =
     phone = extract_phone_number(cand_text)
     if phone:
         if for_other_male:
-            reply = f"{name_prefix}номер {phone} записала, передаю координатору для бронирования места и билета на мужа! Специалист свяжется в ближайшее время."
+            reply = f"{name_prefix}номер {phone} записала, передаю координатору для бронирования места и билета на {proxy_target_gen}! Специалист свяжется в ближайшее время."
         else:
             reply = f"{name_prefix}номер {phone} записала, передаю нашему координатору для бронирования места и билета!"
         return reply, False, ""

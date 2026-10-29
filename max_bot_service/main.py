@@ -954,6 +954,10 @@ def run_server():
 
 
 if __name__ == "__main__":
-    t = threading.Thread(target=bot_worker_loop, daemon=True)
-    t.start()
-    run_server()
+    enable_server = os.environ.get("ENABLE_HEALTH_SERVER", "0") == "1"
+    if enable_server:
+        t = threading.Thread(target=bot_worker_loop, daemon=True)
+        t.start()
+        run_server()
+    else:
+        bot_worker_loop()
