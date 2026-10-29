@@ -476,9 +476,9 @@ def bot_worker_loop():
     
     while True:
         try:
-            url = f"{MAX_API_BASE}/updates"
+            url = f"{MAX_API_BASE}/updates?timeout=3"
             if marker:
-                url += f"?marker={marker}"
+                url += f"&marker={marker}"
                 
             req = urllib.request.Request(url, headers={"Authorization": TOKEN})
             with urllib.request.urlopen(req, timeout=35, context=ctx) as r:
