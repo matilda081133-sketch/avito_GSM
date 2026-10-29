@@ -1181,7 +1181,15 @@ def check_and_reply_valeria():
         unread = client.get_unread_chats(limit=50)
         recent = client.get_recent_chats(limit=30)
         
-        candidates = unread + recent
+        # Сортируем: самые свежие сообщения и тестовые чаты обрабатываются ПЕРВЫМИ!
+        candidates = sorted(
+            unread + recent,
+            key=lambda c: (
+                1 if (TARGET_CHAT_ID and c.get('id') == TARGET_CHAT_ID) or any(p in str(c.get('users', [])).lower() for p in ALLOWED_CANDIDATE_NAMES) else 0,
+                c.get('last_message', {}).get('created', 0)
+            ),
+            reverse=True
+        )
         seen = set()
         replied_any = False
         
