@@ -94,6 +94,29 @@ def healthcheck():
     }
 
 
+
+@app.get("/test-gemini")
+def test_gemini_endpoint():
+    """Тестовый эндпоинт для мгновенной проверки работы Gemini LLM из облака Render."""
+    try:
+        from llm_recruiter import generate_llm_reply
+        test_history = "Кандидат: Здравствуйте, ищу работу на вахту\nАссистент: Здравствуйте! Подбираем для вашего мужа?\nКандидат: Какой муж? Я брату хочу работу найти, ему 25, паспорт РФ"
+        reply = generate_llm_reply(
+            cand_text="Какой муж? Я брату хочу работу найти, ему 25, паспорт РФ",
+            ad_title="Разнорабочий на пищевое производство (вахта)",
+            facility_info={"title": "АБИ Владимир"},
+            dialogue_transcript=test_history
+        )
+        return {
+            "status": "ok",
+            "reply": reply
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "error": str(e)
+        }
+
 @app.post("/max-webhook")
 async def max_webhook(request: Request):
     """

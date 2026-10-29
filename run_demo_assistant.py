@@ -484,7 +484,7 @@ def extract_ready_date(text: str) -> str:
             return w
     return ""
 
-def generate_human_reply(cand_text: str, ad_title: str, cand_history_only: str = "", our_history: str = "", deal_id: str = "", deal_stage: str = "", cand_name: str = "") -> tuple:
+def generate_human_reply(cand_text: str, ad_title: str, cand_history_only: str = "", our_history: str = "", deal_id: str = "", deal_stage: str = "", cand_name: str = "", dialogue_transcript: str = "") -> tuple:
     """
     Интеллектуальный генератор диалога: гибкий, эмпатичный, контекстно-зависимый.
     Понимает подбор для третьих лиц (муж, сын, брат), исправляет неточности,
@@ -506,6 +506,40 @@ def generate_human_reply(cand_text: str, ad_title: str, cand_history_only: str =
     if not cand_first_name and "валерия" in combined_cand:
         cand_first_name = "Валерия"
     name_prefix = f"{cand_first_name}, " if cand_first_name else ""
+
+    # =========================================================================
+    # PRIMARY ENGINE: GOOGLE GEMINI LLM (Kupibilet / Tinkoff Style)
+    # Полный живой анализ контекста диалога, мгновенная адаптация и естественный ответ
+    # =========================================================================
+    try:
+        llm_reply = generate_llm_reply(
+            cand_text=cand_text,
+            ad_title=ad_title,
+            facility_info=fac,
+            cand_history=cand_history_only,
+            our_history=our_history,
+            cand_name=cand_first_name,
+            dialogue_transcript=dialogue_transcript
+        )
+        if llm_reply and len(llm_reply.strip()) > 5:
+            is_disq = False
+            disq_reason = ""
+            llm_lower = llm_reply.lower()
+            if any(w in llm_lower for w in ["не сможем принять", "не проходит согласование", "отказ", "не получится трудоустроить", "строго от 19 до 55", "только граждане рф"]):
+                if any(w in llm_lower for w in ["к сожалению", "не сможем", "не проходит", "отказ"]):
+                    is_disq = True
+                    disq_reason = "Дисквалификация по регламенту (возраст/гражданство)"
+
+            phone = extract_phone_number(cand_text)
+            if phone and deal_id:
+                try:
+                    sync_candidate_to_b24_deal(deal_id, phone=phone, target_stage="PREPARATION")
+                except Exception as e_s:
+                    print(f"B24 sync phone err: {e_s}")
+
+            return llm_reply, is_disq, disq_reason
+    except Exception as e_llm:
+        print(f"Fallback на скрипты из-за ошибки Gemini LLM: {e_llm}")
 
     # =========================================================================
     # 0. ОПРЕДЕЛЕНИЕ СУБЪЕКТА: ПОДБОР ДЛЯ МУЖА / СЫНА / БРАТА / РОДСТВЕННИКА
@@ -1133,6 +1167,14 @@ def process_valeria_chat(chat_id: str, cand_name: str, item_title: str, msgs: li
     our_msgs = [m.get('content', {}).get('text', '') for m in active_msgs if m.get('author_id') == AVITO_USER_ID]
     our_history = " \n ".join(our_msgs)
 
+    transcript_lines = []
+    for m in active_msgs:
+        auth = 'Ассистент' if m.get('author_id') == AVITO_USER_ID else (cand_name or 'Кандидат')
+        txt_m = m.get('content', {}).get('text', '').strip()
+        if txt_m:
+            transcript_lines.append(f"{auth}: {txt_m}")
+    full_transcript = "\n".join(transcript_lines)
+
     reply_text, is_disqualified, disq_reason = generate_human_reply(
         cand_text=valeria_text,
         ad_title=item_title,
@@ -1140,7 +1182,8 @@ def process_valeria_chat(chat_id: str, cand_name: str, item_title: str, msgs: li
         our_history=our_history,
         deal_id=deal_id,
         deal_stage=deal_stage,
-        cand_name=cand_name
+        cand_name=cand_name,
+        dialogue_transcript=full_transcript
     )
 
     if is_explicit_restart and not reply_text.startswith("Здравствуйте"):
