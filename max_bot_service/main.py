@@ -188,6 +188,17 @@ def sanitize_text(text: str) -> str:
     }
     for old, new in replacements.items():
         text = text.replace(old, new).replace(old.capitalize(), new.capitalize())
+        
+    # Жесткий предохранитель: никаких предложений замазать паспорт или поставить водяные знаки
+    blur_patterns = [
+        r'(?:вы\s+)?(?:можете\s+)?замазат[ь|е][^.!?,\n]*',
+        r'(?:вы\s+)?(?:можете\s+)?закрыт[ь|е]\s+(?:серию|номер)[^.!?,\n]*',
+        r'(?:поставить|наложить)\s+водяно[й|е]\s+знак[^.!?,\n]*',
+        r'водяной\s+знак[^.!?,\n]*'
+    ]
+    for bp in blur_patterns:
+        text = re.sub(bp, 'предоставить четкое фото разворота паспорта', text, flags=re.IGNORECASE)
+        
     return text.strip()
 
 
