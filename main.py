@@ -35,18 +35,61 @@ ENABLE_AVITO_ASSISTANT = os.environ.get("ENABLE_AVITO_ASSISTANT", "True").lower(
 ENABLE_MAX_BOT = os.environ.get("ENABLE_MAX_BOT", "True").lower() in ("true", "1", "yes")
 ENABLE_B24_ENHANCER = os.environ.get("ENABLE_B24_ENHANCER", "True").lower() in ("true", "1", "yes")
 
+threads_state = {
+    "avito": None,
+    "max": None,
+    "b24": None
+}
+
+def ensure_threads_alive():
+    """Самоисцеляющий сторож (Watchdog): автоматически воскрешает упавшие потоки при каждом внешнем пинге cron-job."""
+    restarted = []
+    if ENABLE_AVITO_ASSISTANT:
+        t = threads_state.get("avito")
+        if t is None or not t.is_alive():
+            t_av = threading.Thread(target=run_avito_poller_thread, daemon=True, name="AvitoPollerThread")
+            t_av.start()
+            threads_state["avito"] = t_av
+            restarted.append("avito")
+
+    if ENABLE_MAX_BOT:
+        t = threads_state.get("max")
+        if t is None or not t.is_alive():
+            t_mx = threading.Thread(target=run_max_bot_thread, daemon=True, name="MaxBotThread")
+            t_mx.start()
+            threads_state["max"] = t_mx
+            restarted.append("max")
+
+    if ENABLE_B24_ENHANCER:
+        t = threads_state.get("b24")
+        if t is None or not t.is_alive():
+            t_b = threading.Thread(target=run_b24_enhancer_thread, daemon=True, name="B24EnhancerThread")
+            t_b.start()
+            threads_state["b24"] = t_b
+            restarted.append("b24")
+            
+    return restarted
+
 @app.get("/")
 @app.get("/health")
 @app.get("/healthz")
 def healthcheck():
+    restarted = ensure_threads_alive()
+    avito_alive = bool(threads_state.get("avito") and threads_state["avito"].is_alive())
+    max_alive = bool(threads_state.get("max") and threads_state["max"].is_alive())
+    b24_alive = bool(threads_state.get("b24") and threads_state["b24"].is_alive())
+    
     return {
-        "status": "online" if (ENABLE_AVITO_ASSISTANT or ENABLE_MAX_BOT) else "standby",
+        "status": "online",
         "service": "Avito + MAX Cloud AI Recruiter (GSM Logistics) 24/7",
-        "version": "2.6.0",
-        "avito_active": ENABLE_AVITO_ASSISTANT,
-        "max_active": ENABLE_MAX_BOT,
-        "b24_enhancer_active": ENABLE_B24_ENHANCER,
-        "message": "Autonomous cloud recruiter online and running 24/7 with Webhook & Long Polling",
+        "version": "2.6.2",
+        "threads": {
+            "avito_alive": avito_alive,
+            "max_alive": max_alive,
+            "b24_alive": b24_alive
+        },
+        "restarted_on_ping": restarted,
+        "message": "Autonomous cloud recruiter online 24/7 with auto-healing watchdog",
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
     }
 
@@ -78,57 +121,57 @@ async def max_webhook(request: Request):
         return {"status": "error", "message": str(e)}
 
 def run_avito_poller_thread():
-    """Фоновый поток дежурного рекрутера Авито (опрос каждые 12 сек)."""
+    """Фоновый поток дежурного рекрутера Авито с вечным авто-перезапуском при любом сбое."""
     print("[CLOUD AVITO] Дежурный AI-рекрутер Авито запущен в облаке 24/7 (GSM Logistics).", flush=True)
-    try:
-        from run_demo_assistant import check_and_reply_valeria
-        poll_count = 0
-        while True:
-            try:
-                poll_count += 1
-                check_and_reply_valeria()
-                if poll_count % 15 == 0:
-                    print(f"[CLOUD AVITO] Мониторинг чатов активен (проверок: {poll_count}).", flush=True)
-                time.sleep(12)
-            except Exception as e:
-                print(f"[CLOUD AVITO POLLER ERROR] {e}", flush=True)
-                time.sleep(10)
-    except Exception as e_init:
-        print(f"[CLOUD AVITO CRITICAL INIT ERROR] {e_init}", flush=True)
+    while True:
+        try:
+            from run_demo_assistant import check_and_reply_valeria
+            poll_count = 0
+            while True:
+                try:
+                    poll_count += 1
+                    check_and_reply_valeria()
+                    if poll_count % 15 == 0:
+                        print(f"[CLOUD AVITO] Мониторинг чатов активен (проверок: {poll_count}).", flush=True)
+                    time.sleep(12)
+                except Exception as e:
+                    print(f"[CLOUD AVITO POLLER ERROR] {e}", flush=True)
+                    time.sleep(10)
+        except Exception as e_init:
+            print(f"[CLOUD AVITO CRITICAL INIT ERROR] {e_init}. Перезапуск через 10с...", flush=True)
+            time.sleep(10)
 
 def run_b24_enhancer_thread():
-    """Фоновый поток авто-обогащения и форматирования сделок Б24 (каждые 45 сек)."""
+    """Фоновый поток авто-обогащения и форматирования сделок Б24 с авто-перезапуском."""
     print("[CLOUD B24] Сервис авто-обогащения сделок Битрикс24 запущен в облаке (интервал: 45с).", flush=True)
-    try:
-        from b24_sync import sync_recent_raw_deals
-        while True:
-            try:
-                sync_recent_raw_deals(limit=30)
-                time.sleep(45)
-            except Exception as e:
-                print(f"[CLOUD B24 ENHANCER ERROR] {e}", flush=True)
-                time.sleep(30)
-    except Exception as e_init:
-        print(f"[CLOUD B24 INIT ERROR] {e_init}", flush=True)
+    while True:
+        try:
+            from b24_sync import sync_recent_raw_deals
+            while True:
+                try:
+                    sync_recent_raw_deals(limit=30)
+                    time.sleep(45)
+                except Exception as e:
+                    print(f"[CLOUD B24 ENHANCER ERROR] {e}", flush=True)
+                    time.sleep(30)
+        except Exception as e_init:
+            print(f"[CLOUD B24 INIT ERROR] {e_init}. Перезапуск через 15с...", flush=True)
+            time.sleep(15)
 
 def run_max_bot_thread():
-    """Фоновый поток бота МАКС (@id9729371578_bot) и воронки подбора."""
+    """Фоновый поток бота МАКС (@id9729371578_bot) с вечным авто-перезапуском."""
     print("[CLOUD MAX] Сервис МАКС-бота запущен в облаке 24/7.", flush=True)
-    try:
-        from max_bot_service.main import bot_worker_loop
-        bot_worker_loop()
-    except Exception as e:
-        print(f"[CLOUD MAX ERROR] {e}", flush=True)
+    while True:
+        try:
+            from max_bot_service.main import bot_worker_loop
+            bot_worker_loop()
+        except Exception as e:
+            print(f"[CLOUD MAX ERROR] {e}. Перезапуск через 5с...", flush=True)
+            time.sleep(5)
 
 @app.on_event("startup")
 def startup_event():
-    if ENABLE_AVITO_ASSISTANT:
-        t_avito = threading.Thread(target=run_avito_poller_thread, daemon=True, name="AvitoPollerThread")
-        t_avito.start()
-        print("🚀 [STARTUP] Дежурный Авито AI-рекрутер запущен в облаке.", flush=True)
-    else:
-        print("⏸ [STANDBY] AI-ассистент Авито отключен переменной окружения.", flush=True)
-
+    ensure_threads_alive()
     if ENABLE_MAX_BOT:
         try:
             from max_bot_service.main import register_webhook
@@ -136,19 +179,7 @@ def startup_event():
             register_webhook(f"{domain}/max-webhook")
         except Exception as e_wh:
             print(f"[STARTUP WEBHOOK REG ERROR] {e_wh}", flush=True)
-
-        t_max = threading.Thread(target=run_max_bot_thread, daemon=True, name="MaxBotThread")
-        t_max.start()
-        print("🚀 [STARTUP] Бот МАКС запущен в облаке (Webhook + Polling).", flush=True)
-    else:
-        print("⏸ [STANDBY] Бот МАКС отключен переменной окружения.", flush=True)
-
-    if ENABLE_B24_ENHANCER:
-        t_b24 = threading.Thread(target=run_b24_enhancer_thread, daemon=True, name="B24EnhancerThread")
-        t_b24.start()
-        print("🚀 [STARTUP] Авто-обогащение сделок Битрикс24 запущено в облаке.", flush=True)
-    else:
-        print("⏸ [STANDBY] Авто-обогащение сделок Битрикс24 отключено.", flush=True)
+    print("🚀 [STARTUP] Все фоновые сервисы и сторожевой таймер успешно инициализированы.", flush=True)
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", PORT if PORT else 8080))
