@@ -702,7 +702,7 @@ def generate_human_reply(cand_text: str, ad_title: str, cand_history_only: str =
                 return f"Из какого города {proxy_target_nom} планирует выезжать?"
             if not known_date:
                 return f"С какого числа {proxy_target_nom} готов выехать на смену?"
-            return f"{name_prefix}по всем условиям {proxy_target_nom} отлично подходит! На какой контактный номер телефона координатор может связаться с вами или с мужем для бронирования места и билета?"
+            return f"{name_prefix}по всем условиям {proxy_target_nom} отлично подходит! На какой контактный номер телефона координатор может связаться с вами или напрямую с {proxy_target} для бронирования места и билета?"
         else:
             if not known_gender:
                 return "Подскажите, пожалуйста: для мужчины или женщины подбираете работу?"
@@ -1062,7 +1062,7 @@ def generate_human_reply(cand_text: str, ad_title: str, cand_history_only: str =
     if known_gender and known_age and known_cit and (known_city or known_date):
         reply = (
             f"{name_prefix}по всем условиям {proxy_target_nom if for_other_male else 'вы'} отлично подходит{'е' if not for_other_male else ''}!\n\n"
-            f"На какой контактный номер телефона координатор может набрать вас{' или мужа' if for_other_male else ''} для бронирования места и билета?"
+            f"На какой контактный номер телефона координатор может набрать вас{' или напрямую ' + proxy_target_gen if for_other_male else ''} для бронирования места и билета?"
         )
         return reply, False, ""
 
