@@ -742,7 +742,12 @@ def handle_single_update(up: dict):
 # -------------------------------------------------------------
 # БОЕВОЙ ФОНОВЫЙ ЦИКЛ ОПРОСА С ХРАНЕНИЕМ МАРКЕРА В SQLITE
 # -------------------------------------------------------------
+_singleton_poller_lock = threading.Lock()
+
 def bot_worker_loop():
+    if not _singleton_poller_lock.acquire(blocking=False):
+        print("🛑 [SINGLETON PROTECT] Поток bot_worker_loop уже запущен! Второй поток завершает работу.", flush=True)
+        return
     print("=== MAX BOT ENTERPRISE LLM-NATIVE ENGINE ONLINE ===", flush=True)
     marker_str = get_meta("last_marker")
     marker = int(marker_str) if marker_str and marker_str.isdigit() else None

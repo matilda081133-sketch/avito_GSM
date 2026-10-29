@@ -41,34 +41,37 @@ threads_state = {
     "b24": None
 }
 
+_thread_lock = threading.Lock()
+
 def ensure_threads_alive():
-    """Самоисцеляющий сторож (Watchdog): автоматически воскрешает упавшие потоки при каждом внешнем пинге cron-job."""
-    restarted = []
-    if ENABLE_AVITO_ASSISTANT:
-        t = threads_state.get("avito")
-        if t is None or not t.is_alive():
-            t_av = threading.Thread(target=run_avito_poller_thread, daemon=True, name="AvitoPollerThread")
-            t_av.start()
-            threads_state["avito"] = t_av
-            restarted.append("avito")
+    """Самоисцеляющий сторож (Watchdog) с защитой от одновременных вызовов через Mutex."""
+    with _thread_lock:
+        restarted = []
+        if ENABLE_AVITO_ASSISTANT:
+            t = threads_state.get("avito")
+            if t is None or not t.is_alive():
+                t_av = threading.Thread(target=run_avito_poller_thread, daemon=True, name="AvitoPollerThread")
+                t_av.start()
+                threads_state["avito"] = t_av
+                restarted.append("avito")
 
-    if ENABLE_MAX_BOT:
-        t = threads_state.get("max")
-        if t is None or not t.is_alive():
-            t_mx = threading.Thread(target=run_max_bot_thread, daemon=True, name="MaxBotThread")
-            t_mx.start()
-            threads_state["max"] = t_mx
-            restarted.append("max")
+        if ENABLE_MAX_BOT:
+            t = threads_state.get("max")
+            if t is None or not t.is_alive():
+                t_mx = threading.Thread(target=run_max_bot_thread, daemon=True, name="MaxBotThread")
+                t_mx.start()
+                threads_state["max"] = t_mx
+                restarted.append("max")
 
-    if ENABLE_B24_ENHANCER:
-        t = threads_state.get("b24")
-        if t is None or not t.is_alive():
-            t_b = threading.Thread(target=run_b24_enhancer_thread, daemon=True, name="B24EnhancerThread")
-            t_b.start()
-            threads_state["b24"] = t_b
-            restarted.append("b24")
-            
-    return restarted
+        if ENABLE_B24_ENHANCER:
+            t = threads_state.get("b24")
+            if t is None or not t.is_alive():
+                t_b = threading.Thread(target=run_b24_enhancer_thread, daemon=True, name="B24EnhancerThread")
+                t_b.start()
+                threads_state["b24"] = t_b
+                restarted.append("b24")
+                
+        return restarted
 
 @app.get("/")
 @app.get("/health")
@@ -82,7 +85,7 @@ def healthcheck():
     return {
         "status": "online",
         "service": "Avito + MAX Cloud AI Recruiter (GSM Logistics) 24/7",
-        "version": "2.6.2",
+        "version": "2.7.0",
         "threads": {
             "avito_alive": avito_alive,
             "max_alive": max_alive,
