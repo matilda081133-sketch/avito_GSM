@@ -138,9 +138,8 @@ def generate_llm_reply(
 
     models_to_try = [
         "gemini-3.1-flash-lite",
-        "gemini-3.5-flash-lite",
-        "gemini-flash-latest",
-        "gemini-3.1-flash-lite-preview"
+        "gemini-3.1-flash-lite-preview",
+        "gemini-flash-latest"
     ]
 
     for m in models_to_try:
@@ -149,8 +148,7 @@ def generate_llm_reply(
             "temperature": 0.7,
             "maxOutputTokens": 350
         }
-        if "gemini-3" in m:
-            gen_cfg["thinkingConfig"] = {"thinkingBudget": 0}
+        # Reliable standard config without unsupported thinking arguments
 
         payload = {
             "system_instruction": {
