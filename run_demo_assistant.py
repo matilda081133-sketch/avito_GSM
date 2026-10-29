@@ -1030,7 +1030,16 @@ def process_valeria_chat(chat_id: str, cand_name: str, item_title: str, msgs: li
         msgs = [m for m in msgs if m.get('created', 0) >= cutoff_ts]
         if not msgs:
             return False
-    last_msg = msgs[-1]
+
+    # Игнорируем технические сервисные заголовки интеграций (Wappi и т.д.)
+    def is_tech_msg(m):
+        txt = m.get('content', {}).get('text', '').lower()
+        return 'wappi:' in txt or 'wappi :' in txt or ('объявление:' in txt and 'ссылка на объявление:' in txt)
+
+    msgs_clean = [m for m in msgs if not is_tech_msg(m)]
+    if not msgs_clean:
+        return False
+    last_msg = msgs_clean[-1]
     deal = find_b24_deal_for_chat(chat_id)
     deal_id = str(deal.get("ID", "")) if deal else ""
     deal_stage = str(deal.get("STAGE_ID", "")) if deal else ""
