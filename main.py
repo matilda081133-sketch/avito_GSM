@@ -205,14 +205,7 @@ def run_max_bot_thread():
 @app.on_event("startup")
 def startup_event():
     ensure_threads_alive()
-    if ENABLE_MAX_BOT:
-        try:
-            from max_bot_service.main import register_webhook
-            domain = os.environ.get("RENDER_EXTERNAL_URL", "https://avito-gsm.onrender.com").rstrip("/")
-            register_webhook(f"{domain}/max-webhook")
-        except Exception as e_wh:
-            print(f"[STARTUP WEBHOOK REG ERROR] {e_wh}", flush=True)
-    print("🚀 [STARTUP] Все фоновые сервисы и сторожевой таймер успешно инициализированы.", flush=True)
+    print("🚀 [STARTUP] Все фоновые сервисы успешно инициализированы в облаке.", flush=True)
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", PORT if PORT else 8080))
