@@ -322,32 +322,8 @@ def parse_and_enhance_deal(deal: dict) -> dict:
     if deal.get("STAGE_ID") == "NEW" and phone:
         upd_fields["STAGE_ID"] = "UC_G0AG7S" if is_deal_vahta else "PREPARATION"
 
-    # Привязка или обогащение контакта телефоном
-    if contact_id and phone:
-        try:
-            c_res = call_b24("crm.contact.get", {"id": contact_id}).get("result", {})
-            c_phones = c_res.get("PHONE") or []
-            if not c_phones:
-                call_b24("crm.contact.update", {"id": contact_id, "fields": {"PHONE": [{"VALUE": phone, "VALUE_TYPE": "WORK"}]}})
-        except Exception:
-            pass
-    elif not contact_id and phone:
-        try:
-            clean_p = re.sub(r'\D', '', phone)[-10:]
-            dup_res = call_b24('crm.duplicate.findbycomm', {'type': 'PHONE', 'values': [phone, f"+7{clean_p}", f"8{clean_p}"]})
-            dup_result = dup_res.get('result')
-            c_id = None
-            if isinstance(dup_result, dict):
-                c_list = dup_result.get('CONTACT', [])
-                if c_list:
-                    c_id = c_list[0]
-            if not c_id:
-                c_res = call_b24('crm.contact.add', {'fields': {'NAME': name_clean or 'Кандидат', 'PHONE': [{'VALUE': phone, 'VALUE_TYPE': 'WORK'}]}})
-                c_id = c_res.get('result')
-            if c_id:
-                upd_fields['CONTACT_ID'] = c_id
-        except Exception:
-            pass
+    # Привязка телефона к контакту ОТКЛЮЧЕНА:
+    # Интеграция с Wappi автоматически подтягивает номер кандидата к сделке и контакту!
 
     res = call_b24("crm.deal.update", {"id": did, "fields": upd_fields})
     return {"id": did, "title": new_title, "success": res.get("result", False)}
@@ -682,39 +658,9 @@ def sync_candidate_to_b24_deal(chat_id: str, cand_data: dict, is_disqualified: b
             deal_fields['UF_CRM_1768816742475'] = '98' if is_vahta else '96'
             deal_fields['UF_CRM_1768827146250'] = '212' if is_vahta else '214'
 
-            if phone:
-                clean_p = re.sub(r'\D', '', phone)[-10:]
-                existing_contact_id = None
-                dup_res = call_b24('crm.duplicate.findbycomm', {'type': 'PHONE', 'values': [phone, f"+7{clean_p}", f"8{clean_p}"]})
-                dup_result = dup_res.get('result')
-                if isinstance(dup_result, dict):
-                    c_list = dup_result.get('CONTACT', [])
-                    if c_list:
-                        existing_contact_id = c_list[0]
-                
-                if existing_contact_id:
-                    contact_id = existing_contact_id
-                    print(f"[B24 SYNC] Найден существующий контакт #{contact_id} для {phone}, используем его.")
-                    # Проверяем, есть ли уже активная открытая сделка по этому контакту
-                    open_deals = call_b24('crm.deal.list', {
-                        'filter': {'CONTACT_ID': existing_contact_id, 'CLOSED': 'N', 'CATEGORY_ID': 0},
-                        'select': ['ID', 'TITLE', 'STAGE_ID', 'ASSIGNED_BY_ID']
-                    }).get('result', [])
-                    if open_deals:
-                        deal_id = open_deals[0]['ID']
-                        current_deal = open_deals[0]
-                        print(f"[B24 SYNC] У контакта #{existing_contact_id} уже есть активная сделка #{deal_id}! Не создаем дубль, привязываем чат.")
-                else:
-                    c_res = call_b24('crm.contact.add', {
-                        'fields': {
-                            'NAME': name or 'Кандидат',
-                            'PHONE': [{'VALUE': phone, 'VALUE_TYPE': 'WORK'}]
-                        }
-                    })
-                    contact_id = c_res.get('result')
-                
-                if contact_id:
-                    deal_fields['CONTACT_ID'] = contact_id
+            # Не передаем номер телефона и не создаем дубликаты контактов:
+            # Интеграция с Wappi уже подтягивает контакт и номер телефона к сделке!
+            pass
             
             if not deal_id:
                 d_res = call_b24('crm.deal.add', {'fields': deal_fields})
@@ -929,14 +875,8 @@ def sync_candidate_to_b24_deal(chat_id: str, cand_data: dict, is_disqualified: b
             except Exception:
                 pass
 
-        # Привязка телефона к контакту
-        if phone and contact_id:
-            call_b24('crm.contact.update', {
-                'id': contact_id,
-                'fields': {
-                    'PHONE': [{'VALUE': phone, 'VALUE_TYPE': 'WORK'}]
-                }
-            })
+        # Привязка телефона к контакту ОТКЛЮЧЕНА: номер подтягивает Wappi!
+        pass
 
         # Запись деталей в историю таймлайна сделки
         details_list = []
