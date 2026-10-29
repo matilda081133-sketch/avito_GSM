@@ -32,7 +32,7 @@ from config import PORT, HOST, AVITO_CLIENT_ID, AVITO_CLIENT_SECRET, AVITO_USER_
 app = FastAPI(title="HR Cloud Autonomous Recruiter Service", version="2.5.0")
 
 ENABLE_AVITO_ASSISTANT = os.environ.get("ENABLE_AVITO_ASSISTANT", "True").lower() in ("true", "1", "yes")
-ENABLE_MAX_BOT = os.environ.get("ENABLE_MAX_BOT", "True").lower() in ("true", "1", "yes")
+ENABLE_MAX_BOT = os.environ.get("ENABLE_MAX_BOT", "False").lower() in ("true", "1", "yes")
 ENABLE_B24_ENHANCER = os.environ.get("ENABLE_B24_ENHANCER", "True").lower() in ("true", "1", "yes")
 
 threads_state = {

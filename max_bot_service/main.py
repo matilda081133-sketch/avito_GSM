@@ -28,6 +28,7 @@ import urllib.error
 import ssl
 import base64
 import sqlite3
+import http.server
 
 # Настройка UTF-8 вывода
 if sys.stdout is not None:
@@ -889,5 +890,32 @@ def bot_worker_loop():
             time.sleep(2)
 
 
+class HealthHandler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.end_headers()
+        res = {
+            "status": "online",
+            "service": "MAX Messenger Enterprise AI-Recruiter",
+            "version": "2.7.0",
+            "poller_alive": True,
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
+        }
+        self.wfile.write(json.dumps(res, ensure_ascii=False).encode('utf-8'))
+
+    def log_message(self, format, *args):
+        pass
+
+
+def run_http_server():
+    port = int(os.environ.get("PORT", 8080))
+    server = http.server.HTTPServer(("0.0.0.0", port), HealthHandler)
+    print(f"🌍 [HEALTHCHECK] HTTP сервер успешно запущен на порту {port}...", flush=True)
+    server.serve_forever()
+
+
 if __name__ == "__main__":
-    bot_worker_loop()
+    t = threading.Thread(target=bot_worker_loop, daemon=True, name="MaxBotWorkerThread")
+    t.start()
+    run_http_server()
