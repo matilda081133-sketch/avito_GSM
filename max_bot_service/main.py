@@ -12,8 +12,10 @@ MAX MESSENGER ENTERPRISE AI-RECRUITER (PURE LLM-NATIVE ARCHITECTURE)
    - Проживание: ТОЛЬКО корпоративные квартиры со всеми удобствами (слова «общежитие», «хостел», «нары» запрещены).
    - Акция «Приведи друга / родственника»: официальный бонус 5 000 – 10 000 ₽ на карту.
 6. Краткость и человечность: 1-2 емких предложения (до 300 символов), как в живом чате с заботливым человеком.
-7. Атомарная защита от дублей (SQLite processed_mids) + аппаратный дебаунс (4 секунды).
-8. Фоновый бэкенд: Gemini Vision для анализа фото и авто-создание сделки в Битрикс24 при обнаружении телефона.
+7. Интерактивные кнопки (Inline Keyboard) для быстрого выбора 4 объектов при /start и обработка message_callback.
+8. Многоуровневый пул ключей Gemini API (Multi-Key Pool) с авто-переключением при 429 квоте.
+9. Авто-прикрепление ссылок на фото паспорта и ссылки на чат МАКС в таймлайн сделки Битрикс24.
+10. Атомарная защита от дублей (SQLite processed_mids) + аппаратный дебаунс (4 секунды) + singleton lock.
 """
 import sys
 import os
@@ -38,25 +40,26 @@ TOKEN = os.environ.get("MAX_BOT_TOKEN", "f9LHodD0cOK373_zW5FMjbf30myDzXbw3HF5hHB
 MAX_API_BASE = "https://platform-api2.max.ru"
 B24_WEBHOOK = os.environ.get("B24_WEBHOOK_URL", "https://b24-4qx38o.bitrix24.ru/rest/39250/7cbs7mg1qo0vn0ov/")
 
-_DEF_KEY = base64.b64decode("QVEuQWI4Uk42S0xiQURfTWVGOUJiN2F4S3pyaWNFbW9qaTlLSUgtdWZ0OW44c3FnNWpockE=").decode('utf-8')
+# Резервный пул валидных API-ключей Google Gemini
+_KEYS_POOL = [
+    base64.b64decode("QVEuQWI4Uk42S0xiQURfTWVGOUJiN2F4S3pyaWNFbW9qaTlLSUgtdWZ0OW44c3FnNWpockE=").decode('utf-8'),
+    base64.b64decode("QVEuQWI4Uk42Sm9NMHBkaFIzaWJmUm11ckdNcldrVklULXJtaGltY2dSdjZJTU9BdjJ4ZkE=").decode('utf-8')
+]
 
-def get_api_key() -> str:
-    api_key = os.environ.get("GEMINI_API_KEY", "").strip()
-    if not api_key:
-        env_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
-        if os.path.exists(env_path):
-            with open(env_path, "r", encoding="utf-8") as f:
-                for line in f:
-                    if line.startswith("GEMINI_API_KEY="):
-                        api_key = line.split("=", 1)[1].strip()
-                        break
-    return api_key or _DEF_KEY
+def get_api_keys() -> list:
+    keys = []
+    env_k = os.environ.get("GEMINI_API_KEY", "").strip()
+    if env_k:
+        keys.append(env_k)
+    for k in _KEYS_POOL:
+        if k not in keys:
+            keys.append(k)
+    return keys
 
 MODELS_TO_TRY = [
     "gemini-3.1-flash-lite",
-    "gemini-3.5-flash-lite",
     "gemini-flash-latest",
-    "gemini-3.1-flash-lite-preview"
+    "gemini-2.5-flash"
 ]
 
 # Распределение сделок между 3 менеджерами (Маргарита, Анастасия, Анна)
@@ -71,6 +74,14 @@ DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bot_state.db
 
 _chat_send_lock = threading.Lock()
 _recent_chat_sends = {}
+
+# Интерактивные кнопки 4 флагманских объектов
+KEYBOARD_OBJECTS = [
+    [{"type": "callback", "text": "1. 🥩 Владимир (АБИ) от 3 700 ₽", "payload": "Расскажите про АБИ во Владимире"}],
+    [{"type": "callback", "text": "2. 🏭 Кашира (Тепофол) 3 800 ₽", "payload": "Расскажите про Тепофол в Кашире"}],
+    [{"type": "callback", "text": "3. 📦 Подольск (Альфа) от 3 800 ₽", "payload": "Расскажите про склад в Подольске"}],
+    [{"type": "callback", "text": "4. 🐶 Балашиха (Зоотовары) от 3 550 ₽", "payload": "Расскажите про зоотовары в Балашихе"}]
+]
 
 # -------------------------------------------------------------
 # БАЗА ЗНАНИЙ ОБЪЕКТОВ (ПРЯМОЙ РАБОТОДАТЕЛЬ)
@@ -372,7 +383,7 @@ def sanitize_text(text: str) -> str:
 
 
 # -------------------------------------------------------------
-# GEMINI LLM ENGINE (АРХИТЕКТУРА КАК У АССИСТЕНТА АВИТО)
+# GEMINI LLM ENGINE (МУЛЬТИ-КЛЮЧЕВОЙ ПУЛ + THINKING BUDGET 0)
 # -------------------------------------------------------------
 def call_gemini_llm(dialogue_transcript: str, user_message: str, cand_name: str = "", context_hint: str = "") -> str:
     """
@@ -380,10 +391,9 @@ def call_gemini_llm(dialogue_transcript: str, user_message: str, cand_name: str 
     - thinkingBudget: 0 (мгновенный и естественный ответ)
     - Полная хронология диалога в едином блоке
     - 1-2 емких предложения без шаблонных приветствий
+    - Ротация ключей при возникновении 429 квоты
     """
-    api_key = get_api_key()
-    if not api_key:
-        return "Спасибо за сообщение! Подскажите, пожалуйста, сколько вам полных лет и напишите ваш номер телефона для связи с координатором."
+    keys_pool = get_api_keys()
 
     user_prompt = (
         f"ПОЛНАЯ ИСТОРИЯ ПЕРЕПИСКИ В ЧАТЕ:\n{dialogue_transcript}\n\n"
@@ -399,37 +409,44 @@ def call_gemini_llm(dialogue_transcript: str, user_message: str, cand_name: str 
         f"Ответ держи строго в пределах 1-2 коротких емких предложений (до 250 символов)."
     )
 
-    for model_name in MODELS_TO_TRY:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
-        gen_cfg = {
-            "temperature": 0.7,
-            "maxOutputTokens": 300
-        }
-        if "gemini-3" in model_name:
-            gen_cfg["thinkingConfig"] = {"thinkingBudget": 0}
+    for api_key in keys_pool:
+        for model_name in MODELS_TO_TRY:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
+            gen_cfg = {
+                "temperature": 0.7,
+                "maxOutputTokens": 300
+            }
+            if "gemini-3" in model_name:
+                gen_cfg["thinkingConfig"] = {"thinkingBudget": 0}
 
-        payload = {
-            "system_instruction": {"parts": [{"text": SYSTEM_PROMPT_ENTERPRISE_RECRUITER}]},
-            "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
-            "generationConfig": gen_cfg
-        }
+            payload = {
+                "system_instruction": {"parts": [{"text": SYSTEM_PROMPT_ENTERPRISE_RECRUITER}]},
+                "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
+                "generationConfig": gen_cfg
+            }
 
-        try:
-            req = urllib.request.Request(
-                url,
-                data=json.dumps(payload).encode("utf-8"),
-                headers={"Content-Type": "application/json"}
-            )
-            with urllib.request.urlopen(req, timeout=8, context=ctx) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-                candidates = data.get("candidates", [])
-                if candidates:
-                    parts = candidates[0].get("content", {}).get("parts", [])
-                    if parts and "text" in parts[0]:
-                        reply = parts[0]["text"].strip()
-                        return sanitize_text(reply)
-        except Exception as e:
-            print(f"[GEMINI LLM {model_name} ERR]: {e}", flush=True)
+            try:
+                req = urllib.request.Request(
+                    url,
+                    data=json.dumps(payload).encode("utf-8"),
+                    headers={"Content-Type": "application/json"}
+                )
+                with urllib.request.urlopen(req, timeout=8, context=ctx) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
+                    candidates = data.get("candidates", [])
+                    if candidates:
+                        parts = candidates[0].get("content", {}).get("parts", [])
+                        if parts and "text" in parts[0]:
+                            reply = parts[0]["text"].strip()
+                            return sanitize_text(reply)
+            except urllib.error.HTTPError as he:
+                if he.code == 429:
+                    print(f"[GEMINI KEY 429] Переключение на следующий API-ключ...", flush=True)
+                    break # Переходим к следующему ключу
+                else:
+                    print(f"[GEMINI LLM {model_name} HTTP {he.code}]: {he}", flush=True)
+            except Exception as e:
+                print(f"[GEMINI LLM {model_name} ERR]: {e}", flush=True)
 
     return (
         "Спасибо за сообщение! Служба безопасности наших производств согласовывает кандидатов "
@@ -441,7 +458,7 @@ def call_gemini_llm(dialogue_transcript: str, user_message: str, cand_name: str 
 # GEMINI VISION (ПРОВЕРКА ФОТО ДОКУМЕНТОВ)
 # -------------------------------------------------------------
 def check_document_vision(img_url: str) -> dict:
-    api_key = get_api_key()
+    keys_pool = get_api_keys()
     try:
         req = urllib.request.Request(img_url, headers={'User-Agent': 'Mozilla/5.0'})
         with urllib.request.urlopen(req, context=ctx, timeout=15) as r:
@@ -471,21 +488,22 @@ def check_document_vision(img_url: str) -> dict:
             'generationConfig': {'responseMimeType': 'application/json', 'temperature': 0.1}
         }
 
-        for model_name in MODELS_TO_TRY:
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
-            try:
-                req_g = urllib.request.Request(url, headers={'Content-Type': 'application/json'}, data=json.dumps(payload).encode('utf-8'))
-                with urllib.request.urlopen(req_g, context=ctx, timeout=20) as r2:
-                    data = json.loads(r2.read().decode('utf-8'))
-                    txt = data['candidates'][0]['content']['parts'][0]['text']
-                    parsed = json.loads(txt)
-                    return {
-                        "is_passport": bool(parsed.get("is_passport")),
-                        "doc_type": parsed.get("doc_type", "not_a_document"),
-                        "description": parsed.get("description", "")
-                    }
-            except Exception as e:
-                print(f"[GEMINI VISION {model_name} ERR]: {e}", flush=True)
+        for api_key in keys_pool:
+            for model_name in MODELS_TO_TRY:
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
+                try:
+                    req_g = urllib.request.Request(url, headers={'Content-Type': 'application/json'}, data=json.dumps(payload).encode('utf-8'))
+                    with urllib.request.urlopen(req_g, context=ctx, timeout=20) as r2:
+                        data = json.loads(r2.read().decode('utf-8'))
+                        txt = data['candidates'][0]['content']['parts'][0]['text']
+                        parsed = json.loads(txt)
+                        return {
+                            "is_passport": bool(parsed.get("is_passport")),
+                            "doc_type": parsed.get("doc_type", "not_a_document"),
+                            "description": parsed.get("description", "")
+                        }
+                except Exception as e:
+                    print(f"[GEMINI VISION {model_name} ERR]: {e}", flush=True)
 
     except Exception as e:
         print(f"[GEMINI VISION ERR]: {e}", flush=True)
@@ -546,7 +564,24 @@ def extract_phone(text):
     return None
 
 
-def create_b24_deal(name, phone, object_title="АБИ"):
+def add_b24_timeline_comment(deal_id, comment_text):
+    try:
+        url = f"{B24_WEBHOOK}crm.timeline.comment.add.json"
+        payload = {
+            "fields": {
+                "ENTITY_ID": deal_id,
+                "ENTITY_TYPE": "deal",
+                "COMMENT": comment_text
+            }
+        }
+        req = urllib.request.Request(url, data=json.dumps(payload).encode('utf-8'), headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=8, context=ctx) as r:
+            pass
+    except Exception as e:
+        print(f"[B24 TIMELINE ERR]: {e}", flush=True)
+
+
+def create_b24_deal(name, phone, object_title="АБИ", chat_id=None):
     global current_girl_idx
     manager_id = GIRLS_QUEUE[current_girl_idx % len(GIRLS_QUEUE)]
     current_girl_idx += 1
@@ -572,13 +607,26 @@ def create_b24_deal(name, phone, object_title="АБИ"):
                 "CONTACT_ID": cid,
                 "ASSIGNED_BY_ID": manager_id,
                 "SOURCE_ID": "OTHER",
-                "SOURCE_DESCRIPTION": f"Официальный МАКС Бот (@id9729371578_bot) | Интерес: {object_title}"
+                "SOURCE_DESCRIPTION": f"Официальный МАКС Бот (@id9729371578_bot) | Chat ID: {chat_id} | Интерес: {object_title}"
             }
         }
         req2 = urllib.request.Request(d_url, data=json.dumps(d_payload).encode('utf-8'), headers={"Content-Type": "application/json"})
         with urllib.request.urlopen(req2, timeout=10, context=ctx) as r2:
             did = json.loads(r2.read().decode('utf-8'))['result']
         print(f"⭐ [B24 СДЕЛКА СОЗДАНА] #{did} для {name} ({phone}), Назначена: {manager_id}", flush=True)
+
+        # Обогащаем таймлайн сделки
+        if did:
+            comment = (
+                f"🤖 Новая заявка из официального бота МАКС (@id9729371578_bot)\n\n"
+                f"👤 Кандидат: {name}\n"
+                f"📞 Телефон: {phone}\n"
+                f"💬 Chat ID: {chat_id}\n"
+                f"🏢 Выбранный объект: {object_title}\n"
+                f"📅 Дата: {time.strftime('%Y-%m-%d %H:%M:%S')}"
+            )
+            add_b24_timeline_comment(did, comment)
+
         return did
     except Exception as e:
         print(f"[B24 CREATE ERR]: {e}", flush=True)
@@ -593,6 +641,28 @@ def handle_single_update(up: dict):
         return
 
     u_type = up.get("update_type")
+
+    # =========================================================
+    # 0. ОБРАБОТКА НАЖАТИЯ ИНТЕРАКТИВНЫХ КНОПОК (CALLBACK)
+    # =========================================================
+    if u_type == "message_callback":
+        cb = up.get("callback", {})
+        payload = cb.get("payload") or ""
+        sender = cb.get("user") or {}
+        user_id = sender.get("user_id")
+        chat_id = up.get("chat_id") or user_id
+        name = sender.get("name") or "Кандидат"
+
+        # Преобразуем callback в текстовое сообщение кандидата
+        up = {
+            "update_type": "message_created",
+            "message": {
+                "sender": sender,
+                "recipient": {"chat_type": "dialog", "chat_id": chat_id, "user_id": user_id},
+                "body": {"mid": f"cb_{int(time.time()*1000)}", "text": payload}
+            }
+        }
+        return handle_single_update(up)
 
     # =========================================================
     # 1. ОБРАБОТКА ВХОДЯЩЕГО СООБЩЕНИЯ ИЛИ ФОТО
@@ -638,13 +708,39 @@ def handle_single_update(up: dict):
         if mid:
             update_user_state(chat_id, last_mid=mid)
 
+        # -------------------------------------------------------------
+        # А. СТАРТОВОЕ МЕНЮ С КНОПКАМИ ДЛЯ НОВЫХ СОБЕСЕДНИКОВ (/start)
+        # -------------------------------------------------------------
+        is_first_start = (u_type == "bot_started") or (text.lower() in ["/start", "старт", "начать", "меню"])
+        if is_first_start and not get_chat_history(chat_id, limit=2):
+            welcome_msg = (
+                "Здравствуйте! Рада приветствовать вас. Мы — прямой работодатель, предлагаем работу и вахту с бесплатным проживанием в чистых квартирах и питанием.\n\n"
+                "Выберите интересующий объект кнопкой ниже или задайте любой вопрос:"
+            )
+            send_message(chat_id, welcome_msg, keyboard=KEYBOARD_OBJECTS)
+            save_chat_message(chat_id, "model", welcome_msg)
+            return
+
         # Сохраняем сообщение соискателя в локальную базу
         if text:
             print(f"📩 [MAX INCOMING] From {name} (Chat {chat_id}): '{text}'", flush=True)
             save_chat_message(chat_id, "user", text)
 
         # -------------------------------------------------------------
-        # А. ОБРАБОТКА ФОТО ДОКУМЕНТОВ (GEMINI VISION)
+        # Б. ОБРАБОТКА ГОЛОСОВЫХ И АУДИОСООБЩЕНИЙ
+        # -------------------------------------------------------------
+        has_voice = any(att.get("type") in ["audio", "voice"] for att in attachments)
+        if has_voice:
+            voice_reply = (
+                "Спасибо за сообщение! Я текстовый специалист службы заботы и не могу прослушать аудиозапись. "
+                "Пожалуйста, напишите ваш вопрос текстом или оставьте ваш номер телефона — координатор сразу перезвонит вам!"
+            )
+            send_message(chat_id, voice_reply)
+            save_chat_message(chat_id, "model", voice_reply)
+            return
+
+        # -------------------------------------------------------------
+        # В. ОБРАБОТКА ФОТО ДОКУМЕНТОВ (GEMINI VISION)
         # -------------------------------------------------------------
         has_photo = any(att.get("type") in ["image", "photo", "file"] for att in attachments)
         if has_photo:
@@ -675,6 +771,11 @@ def handle_single_update(up: dict):
                 elif dtype == "main_page":
                     update_user_state(chat_id, has_main_page=1)
                     st["has_main_page"] = 1
+
+                    # Сохраняем ссылку на фото в сделку Битрикс24
+                    if st.get("deal_id"):
+                        add_b24_timeline_comment(st.get("deal_id"), f"📷 Получено фото паспорта: Главный разворот 2-3 стр.\nСсылка: {photo_url}")
+
                     if not st.get("has_reg_page"):
                         reply = (
                             "Главный разворот паспорта принят! 👍\n\n"
@@ -693,6 +794,11 @@ def handle_single_update(up: dict):
                 elif dtype == "registration_page":
                     update_user_state(chat_id, has_reg_page=1)
                     st["has_reg_page"] = 1
+
+                    # Сохраняем ссылку на фото в сделку Битрикс24
+                    if st.get("deal_id"):
+                        add_b24_timeline_comment(st.get("deal_id"), f"📷 Получено фото паспорта: Страница с пропиской\nСсылка: {photo_url}")
+
                     if not st.get("has_main_page"):
                         reply = (
                             "Страница со штампом прописки принята! 👍\n\n"
@@ -708,17 +814,16 @@ def handle_single_update(up: dict):
                     return
 
         # -------------------------------------------------------------
-        # Б. ФОНОВОЕ СОХРАНЕНИЕ НОМЕРА ТЕЛЕФОНА В БИТРИКС24
+        # Г. ФОНОВОЕ СОХРАНЕНИЕ НОМЕРА ТЕЛЕФОНА В БИТРИКС24
         # -------------------------------------------------------------
         phone = extract_phone(text)
         if phone and not st.get("phone"):
-            did = create_b24_deal(name, phone, st.get("object", "АБИ"))
+            did = create_b24_deal(name, phone, st.get("object", "АБИ"), chat_id=chat_id)
             update_user_state(chat_id, phone=phone, deal_id=did)
 
         # -------------------------------------------------------------
-        # В. ПРЯМОЙ ОТВЕТ НЕЙРОСЕТИ (GEMINI LLM С ЖИВОЙ СТЕНОГРАММОЙ МАКС)
+        # Д. ПРЯМОЙ ОТВЕТ НЕЙРОСЕТИ (GEMINI LLM С ЖИВОЙ СТЕНОГРАММОЙ МАКС)
         # -------------------------------------------------------------
-        # Получаем реальную полную историю переписки прямо из МАКС
         live_transcript = get_live_transcript(chat_id, count=10)
 
         context_hint = ""
@@ -748,6 +853,7 @@ def bot_worker_loop():
     if not _singleton_poller_lock.acquire(blocking=False):
         print("🛑 [SINGLETON PROTECT] Поток bot_worker_loop уже запущен! Второй поток завершает работу.", flush=True)
         return
+
     print("=== MAX BOT ENTERPRISE LLM-NATIVE ENGINE ONLINE ===", flush=True)
     marker_str = get_meta("last_marker")
     marker = int(marker_str) if marker_str and marker_str.isdigit() else None
