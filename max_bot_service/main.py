@@ -341,6 +341,9 @@ def init_db():
     conn.close()
 
 
+init_db()
+
+
 def get_meta(key: str, default=None):
     try:
         conn = sqlite3.connect(DB_PATH)
