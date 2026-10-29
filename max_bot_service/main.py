@@ -368,7 +368,25 @@ def set_meta(key: str, value):
 
 
 def register_webhook(webhook_url: str):
-    """Регистрирует Webhook в MAX Bot API (мгновенная доставка + пробуждение Render)."""
+    """
+    Регистрирует Webhook в MAX Bot API ИСКЛЮЧИТЕЛЬНО после успешного Handshake-теста!
+    Если эндпоинт возвращает 404 (старый билд на облаке) или недоступен — регистрация отменяется,
+    чтобы исключить 'Черную дыру' (сгорание сообщений кандидатов).
+    """
+    try:
+        check_req = urllib.request.Request(
+            webhook_url,
+            data=b"{}",
+            headers={"Content-Type": "application/json", "User-Agent": "MAX-Webhook-Tester/1.0"}
+        )
+        with urllib.request.urlopen(check_req, timeout=5, context=ctx) as test_resp:
+            if test_resp.status != 200:
+                print(f"⚠️ [WEBHOOK HANDSHAKE REJECTED] {webhook_url} вернул HTTP {test_resp.status}. Отмена регистрации, остаемся на надежном Long Polling!", flush=True)
+                return None
+    except Exception as e_check:
+        print(f"⚠️ [WEBHOOK HANDSHAKE FAILED] {webhook_url} недоступен ({e_check}). Отмена регистрации, остаемся на надежном Long Polling!", flush=True)
+        return None
+
     url = f"{MAX_API_BASE}/subscriptions"
     payload = {"url": webhook_url}
     req = urllib.request.Request(
@@ -467,7 +485,9 @@ def send_message(chat_id, text, keyboard=None):
         })
         try:
             with urllib.request.urlopen(req, timeout=10, context=ctx) as r:
-                return json.loads(r.read().decode('utf-8'))
+                res = json.loads(r.read().decode('utf-8'))
+                print(f"📤 [MAX SENT] Chat {chat_id}: '{text[:100]}...' [mid: {res.get('message', {}).get('body', {}).get('mid')}]", flush=True)
+                return res
         except Exception as e:
             print(f"[MAX SEND ERR attempt {attempt+1}] {e}", flush=True)
             time.sleep(1)
@@ -643,6 +663,7 @@ def handle_single_update(up: dict):
         # Сохраняем в историю чата для LLM
         hist = CHAT_HISTORIES.setdefault(chat_id, [])
         if text:
+            print(f"📩 [MAX INCOMING] From: {name} (Chat {chat_id}): '{text}'", flush=True)
             hist.append({"role": "user", "text": text})
 
         # Определение прикрепленного фото
