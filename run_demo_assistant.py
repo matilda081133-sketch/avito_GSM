@@ -538,9 +538,9 @@ def generate_human_reply(cand_text: str, ad_title: str, cand_history_only: str =
 
     age = extract_age(combined_cand)
     if age:
-        if age < 18:
-            reason = f"Возраст {age}л (до 18)"
-            reply = f"{name_prefix}мы принимаем строго с 18 полных лет (официальное оформление). Будем рады сотрудничать с вами после совершеннолетия!"
+        if age <= 18:
+            reason = f"Возраст {age}л (до 19 лет не принимаем)"
+            reply = f"{name_prefix}к сожалению, по регламенту службы безопасности на наши объекты согласование и прием возможны строго с 19 лет (18 полных лет не принимаем). Спасибо за интерес и удачи в поиске работы!"
             return reply, True, reason
         elif age > 55:
             reason = f"Возраст {age}л (старше 55)"

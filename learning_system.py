@@ -120,6 +120,15 @@ def match_learned_rule(cand_text: str, cand_name: str = "") -> Tuple[Optional[st
         )
         return reply, False, ""
 
+    # 3.1. Проверка возраста 18 лет (прием строго с 19 лет)
+    if any(k in t for k in ["мне 18", "18 лет", "18 полных", "исполнилось 18", "с 18 лет", "с 18 берете"]):
+        reason = "Возраст 18 лет (до 19 лет не принимаем)"
+        reply = (
+            f"{name_prefix}к сожалению, по регламенту согласования службы безопасности на наши объекты прием возможен строго с 19 лет "
+            "(18 полных лет не принимаем). Спасибо за интерес к компании и удачи вам в поиске работы!"
+        )
+        return reply, True, reason
+
     # 4. Проверка совпадения с другими FAQ в learned_rules.json
     faq = rules.get("faq_answers", {})
     for item in faq.values():
