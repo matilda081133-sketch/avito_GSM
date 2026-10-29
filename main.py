@@ -12,7 +12,7 @@ import os
 import time
 import threading
 import asyncio
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 import uvicorn
 
 # UTF-8 encoding support
@@ -42,13 +42,40 @@ def healthcheck():
     return {
         "status": "online" if (ENABLE_AVITO_ASSISTANT or ENABLE_MAX_BOT) else "standby",
         "service": "Avito + MAX Cloud AI Recruiter (GSM Logistics) 24/7",
-        "version": "2.5.0",
+        "version": "2.6.0",
         "avito_active": ENABLE_AVITO_ASSISTANT,
         "max_active": ENABLE_MAX_BOT,
         "b24_enhancer_active": ENABLE_B24_ENHANCER,
-        "message": "Autonomous cloud recruiter online and running 24/7",
+        "message": "Autonomous cloud recruiter online and running 24/7 with Webhook & Long Polling",
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
     }
+
+
+@app.post("/max-webhook")
+async def max_webhook(request: Request):
+    """
+    Высокоскоростной входящий Webhook от MAX Messenger Bot API.
+    Мгновенно пробуждает сервер Render и обрабатывает входящие сообщения за <1 сек.
+    """
+    try:
+        body = await request.json()
+        from max_bot_service.main import handle_single_update
+        
+        # Если пришел массив обновлений
+        if isinstance(body, list):
+            for item in body:
+                handle_single_update(item)
+        elif isinstance(body, dict):
+            if "updates" in body and isinstance(body["updates"], list):
+                for item in body["updates"]:
+                    handle_single_update(item)
+            else:
+                handle_single_update(body)
+                
+        return {"status": "ok"}
+    except Exception as e:
+        print(f"[MAX WEBHOOK ERROR] {e}", flush=True)
+        return {"status": "error", "message": str(e)}
 
 def run_avito_poller_thread():
     """Фоновый поток дежурного рекрутера Авито (опрос каждые 12 сек)."""
@@ -103,9 +130,16 @@ def startup_event():
         print("⏸ [STANDBY] AI-ассистент Авито отключен переменной окружения.", flush=True)
 
     if ENABLE_MAX_BOT:
+        try:
+            from max_bot_service.main import register_webhook
+            domain = os.environ.get("RENDER_EXTERNAL_URL", "https://avito-gsm.onrender.com").rstrip("/")
+            register_webhook(f"{domain}/max-webhook")
+        except Exception as e_wh:
+            print(f"[STARTUP WEBHOOK REG ERROR] {e_wh}", flush=True)
+
         t_max = threading.Thread(target=run_max_bot_thread, daemon=True, name="MaxBotThread")
         t_max.start()
-        print("🚀 [STARTUP] Бот МАКС запущен в облаке.", flush=True)
+        print("🚀 [STARTUP] Бот МАКС запущен в облаке (Webhook + Polling).", flush=True)
     else:
         print("⏸ [STANDBY] Бот МАКС отключен переменной окружения.", flush=True)
 

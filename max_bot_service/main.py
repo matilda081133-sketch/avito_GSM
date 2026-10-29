@@ -331,8 +331,74 @@ def init_db():
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     """)
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS bot_meta (
+        key TEXT PRIMARY KEY,
+        value TEXT
+    )
+    """)
     conn.commit()
     conn.close()
+
+
+def get_meta(key: str, default=None):
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+        cur.execute("SELECT value FROM bot_meta WHERE key = ?", (key,))
+        row = cur.fetchone()
+        conn.close()
+        return row[0] if row else default
+    except Exception:
+        return default
+
+
+def set_meta(key: str, value):
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+        cur.execute("INSERT OR REPLACE INTO bot_meta (key, value) VALUES (?, ?)", (key, str(value)))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"[SET META ERR]: {e}", flush=True)
+
+
+def register_webhook(webhook_url: str):
+    """Регистрирует Webhook в MAX Bot API (мгновенная доставка + пробуждение Render)."""
+    url = f"{MAX_API_BASE}/subscriptions"
+    payload = {"url": webhook_url}
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode('utf-8'),
+        headers={"Authorization": TOKEN, "Content-Type": "application/json"}
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10, context=ctx) as r:
+            res = json.loads(r.read().decode('utf-8'))
+            print(f"🚀 [MAX WEBHOOK REGISTERED] {webhook_url}: {res}", flush=True)
+            return res
+    except Exception as e:
+        print(f"⚠️ [MAX WEBHOOK REGISTRATION ERR]: {e}", flush=True)
+        return None
+
+
+def delete_webhook(webhook_url: str):
+    import urllib.parse
+    url = f"{MAX_API_BASE}/subscriptions?url={urllib.parse.quote(webhook_url, safe='')}"
+    req = urllib.request.Request(
+        url,
+        headers={"Authorization": TOKEN},
+        method="DELETE"
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10, context=ctx) as r:
+            res = json.loads(r.read().decode('utf-8'))
+            print(f"[MAX WEBHOOK DELETED] {webhook_url}: {res}", flush=True)
+            return res
+    except Exception as e:
+        print(f"[MAX WEBHOOK DELETE ERR]: {e}", flush=True)
+        return None
 
 
 def get_user_state(chat_id, user_id=None, name="Кандидат"):
@@ -485,10 +551,343 @@ def create_b24_deal(name, phone, object_key):
 CHAT_HISTORIES = {}
 
 
+def handle_single_update(up: dict):
+    """
+    Единая точка обработки любого события от MAX API.
+    Вызывается синхронно при входящем Webhook-запросе или из цикла long polling.
+    """
+    if not isinstance(up, dict):
+        return
+
+    u_type = up.get("update_type")
+
+    # =========================================================
+    # 1. ОБРАБОТКА ИНЛАЙН-КНОПКИ ВЫБОРА ОБЪЕКТА
+    # =========================================================
+    if u_type == "message_callback":
+        cb = up.get("callback", {})
+        cb_id = cb.get("callback_id")
+        payload = cb.get("payload", "")
+        sender = up.get("sender") or cb.get("user") or {}
+        user_id = sender.get("user_id")
+        rec = up.get("message", {}).get("recipient", {})
+        chat_type = rec.get("chat_type")
+        chat_id = rec.get("chat_id") or user_id
+        name = sender.get("name") or sender.get("first_name") or "Кандидат"
+        
+        if chat_type and chat_type != "dialog":
+            return
+        if (isinstance(chat_id, int) and chat_id <= 0) or str(chat_id).startswith("-"):
+            return
+        
+        if payload in OBJECTS_DATA and chat_id:
+            obj = OBJECTS_DATA[payload]
+            if cb_id:
+                answer_callback(cb_id, f"Выбран: {obj['title']}")
+                
+            update_user_state(
+                chat_id,
+                scenario="sms",
+                step="AWAITING_PHONE",
+                object=payload,
+                name=name
+            )
+            
+            # ЕДИНОЕ емкое сообщение без дублирования
+            msg = (
+                f"Отличный выбор! {obj['excerpt']}\n\n"
+                "────────────────────────\n"
+                "⚠️ На ближайший заезд осталось всего 3 свободных места!\n"
+                "📞 Напишите ваш номер телефона — менеджер сразу закрепит за вами бронь места:"
+            )
+            send_message(chat_id, msg)
+            return
+
+    # =========================================================
+    # 2. ВХОДЯЩЕЕ СООБЩЕНИЕ / ФОТО / СТАРТ
+    # =========================================================
+    elif u_type in ["message_created", "bot_started"]:
+        msg = up.get("message", {})
+        sender = msg.get("sender") or up.get("user") or {}
+        if sender.get("is_bot"):
+            return
+            
+        user_id = sender.get("user_id")
+        rec = msg.get("recipient", {})
+        chat_type = rec.get("chat_type")
+        chat_id = rec.get("chat_id") or up.get("chat_id") or user_id
+        name = sender.get("name") or f"{sender.get('first_name', '')} {sender.get('last_name', '')}".strip() or "Кандидат"
+        
+        if chat_type and chat_type != "dialog":
+            return
+        if not chat_id or (isinstance(chat_id, int) and chat_id <= 0) or str(chat_id).startswith("-"):
+            return
+            
+        body = msg.get("body", {})
+        mid = body.get("mid")
+        text = (body.get("text") or "").strip()
+        attachments = body.get("attachments", [])
+        start_payload = up.get("payload") or ""
+        
+        st = get_user_state(chat_id, user_id=user_id, name=name)
+        
+        # Защита от дублей одного и того же mid
+        if mid and st.get("last_mid") == mid:
+            return
+        if mid:
+            update_user_state(chat_id, last_mid=mid)
+            
+        # Сохраняем в историю чата для LLM
+        hist = CHAT_HISTORIES.setdefault(chat_id, [])
+        if text:
+            hist.append({"role": "user", "text": text})
+
+        # Определение прикрепленного фото
+        has_photo = any(att.get("type") in ["image", "photo", "file"] for att in attachments)
+        photo_url = None
+        if has_photo:
+            photo_att = next((att for att in attachments if att.get("type") in ["image", "photo", "file"]), None)
+            photo_url = photo_att.get("payload", {}).get("url") if photo_att else None
+
+        # Проверка на телефон в тексте
+        phone = extract_phone(text)
+
+        # -------------------------------------------------------------
+        # 1. ОБРАБОТКА ФОТО ДОКУМЕНТОВ ЧЕРЕЗ GEMINI VISION
+        # -------------------------------------------------------------
+        if has_photo and photo_url:
+            print(f"[GEMINI VISION] Проверяем входящее фото для чата {chat_id}...", flush=True)
+            doc_check = check_document_vision(photo_url)
+            print(f"[GEMINI VISION РЕЗУЛЬТАТ]: {doc_check}", flush=True)
+
+            is_pass = doc_check.get("is_passport")
+            dtype = doc_check.get("doc_type")
+            desc = doc_check.get("description", "изображение")
+
+            # А. Если это НЕ паспорт (дверь, улица, интерьер, случайное фото)
+            if not is_pass or dtype == "not_a_document":
+                reply = (
+                    f"Спасибо за снимок! Но на фото не видно паспорта (кажется, это {desc}).\n\n"
+                    "Для службы безопасности режимного завода и оформления пропуска на КПП нам требуются именно официальные документы:\n"
+                    "1️⃣ Главный разворот паспорта (2–3 страница с вашей фотографией)\n"
+                    "2️⃣ Разворот с действующей пропиской (штамп регистрации)\n\n"
+                    "Пожалуйста, сфотографируйте и пришлите разворот паспорта!"
+                )
+                send_message(chat_id, reply)
+                hist.append({"role": "model", "text": reply})
+                return
+
+            # Б. Это главный разворот паспорта (2-3 стр)
+            elif dtype == "main_page":
+                update_user_state(chat_id, has_main_page=1)
+                st["has_main_page"] = 1
+                
+                if not st.get("has_reg_page"):
+                    reply = (
+                        "Главный разворот паспорта принят! 👍\n\n"
+                        "Теперь пришлите, пожалуйста, второе фото — разворот с действующей пропиской (штамп регистрации), "
+                        "чтобы служба безопасности завершила оформление пропуска."
+                    )
+                    send_message(chat_id, reply)
+                    hist.append({"role": "model", "text": reply})
+                    return
+                else:
+                    reply = (
+                        "Отлично, все необходимые документы получены! Передал их в службу безопасности на оформление пропуска.\n\n"
+                        "В течение 15–30 минут менеджер свяжется с вами по телефону для подтверждения деталей заезда!"
+                    )
+                    update_user_state(chat_id, step="COMPLETED")
+                    send_message(chat_id, reply)
+                    hist.append({"role": "model", "text": reply})
+                    return
+
+            # В. Это страница прописки / регистрации
+            elif dtype == "registration_page":
+                update_user_state(chat_id, has_reg_page=1)
+                st["has_reg_page"] = 1
+
+                if not st.get("has_main_page"):
+                    reply = (
+                        "Страница со штампом прописки принята! 👍\n\n"
+                        "Теперь пришлите, пожалуйста, фото главного разворота паспорта (2–3 страница с вашей фотографией)."
+                    )
+                    send_message(chat_id, reply)
+                    hist.append({"role": "model", "text": reply})
+                    return
+                else:
+                    reply = (
+                        "Отлично, все необходимые документы получены! Передал их в службу безопасности на оформление пропуска.\n\n"
+                        "В течение 15–30 минут менеджер свяжется с вами по телефону для подтверждения деталей заезда!"
+                    )
+                    update_user_state(chat_id, step="COMPLETED")
+                    send_message(chat_id, reply)
+                    hist.append({"role": "model", "text": reply})
+                    return
+            else:
+                reply = (
+                    "Фото получено! Проверьте, пожалуйста, чтобы было четко видно главный разворот паспорта с фото "
+                    "и страницу с пропиской для согласования службой безопасности завода."
+                )
+                send_message(chat_id, reply)
+                return
+
+        # -------------------------------------------------------------
+        # 2. ЕСЛИ СОИСКАТЕЛЬ ПРИСЛАЛ НОМЕР ТЕЛЕФОНА
+        # -------------------------------------------------------------
+        if phone:
+            obj_k = st.get("object", "abi")
+            obj_info = OBJECTS_DATA.get(obj_k, OBJECTS_DATA["abi"])
+            did = create_b24_deal(name, phone, obj_k)
+            
+            update_user_state(
+                chat_id,
+                phone=phone,
+                deal_id=did,
+                step="AWAITING_DOCS"
+            )
+            
+            reply = (
+                f"Спасибо! Номер {phone} принят, место на объекте «{obj_info['title']}» забронировано за вами! 👍\n\n"
+                "Чтобы служба безопасности завода выписала электронный пропуск на КПП и координатор подготовил заселение в комфортную квартиру, "
+                "отправьте, пожалуйста, два четких фото:\n"
+                "1️⃣ Главный разворот паспорта (2–3 страница с вашей фотографией)\n"
+                "2️⃣ Разворот со штампом прописки (регистрации)\n\n"
+                "Жду фото документов!"
+            )
+            send_message(chat_id, reply)
+            hist.append({"role": "model", "text": reply})
+            return
+
+        # -------------------------------------------------------------
+        # 3. ВЫБОР ОБЪЕКТА ЦИФРОЙ ИЛИ НАЗВАНИЕМ (1, 2, 3, 4)
+        # -------------------------------------------------------------
+        num_map = {"1": "abi", "2": "tepofol", "3": "alfa", "4": "smart"}
+        matched_key = None
+        for num, k in num_map.items():
+            if text == num or text.startswith(num + ".") or text.startswith(num + ")"):
+                matched_key = k
+                break
+        if not matched_key:
+            t_low = text.lower()
+            if "аби" in t_low or "владимир" in t_low: matched_key = "abi"
+            elif "тепофол" in t_low or "кашир" in t_low: matched_key = "tepofol"
+            elif "альфа" in t_low or "техформ" in t_low or "подольск" in t_low or "климовск" in t_low: matched_key = "alfa"
+            elif "смарт" in t_low or "балаших" in t_low: matched_key = "smart"
+
+        if matched_key:
+            obj = OBJECTS_DATA[matched_key]
+            update_user_state(
+                chat_id,
+                scenario="sms",
+                step="AWAITING_PHONE",
+                object=matched_key,
+                name=name
+            )
+            msg = (
+                f"Отличный выбор! {obj['excerpt']}\n\n"
+                "────────────────────────\n"
+                "⚠️ На ближайший заезд осталось всего 3 свободных места!\n"
+                "📞 Напишите ваш номер телефона — менеджер сразу закрепит за вами бронь места:"
+            )
+            send_message(chat_id, msg)
+            hist.append({"role": "model", "text": msg})
+            return
+
+        # -------------------------------------------------------------
+        # 4. ОБНАРУЖЕНИЕ СТАРТА / АВИТО / РАССЫЛКИ
+        # -------------------------------------------------------------
+        full_payload = (start_payload or "").strip()
+        if text.startswith("/start "):
+            full_payload = text.replace("/start ", "").strip()
+        elif text.startswith("/start"):
+            full_payload = text.replace("/start", "").strip()
+
+        # Проверяем, пришел ли кандидат с Авито по конкретной вакансии (например: abi_95420 или tepofol_95421)
+        matched_avito_obj = None
+        avito_deal_id = None
+        for k in ["abi", "tepofol", "alfa", "smart"]:
+            if k in full_payload.lower():
+                matched_avito_obj = k
+                m_d = re.search(r'\d+', full_payload)
+                if m_d:
+                    avito_deal_id = int(m_d.group(0))
+                break
+
+        if matched_avito_obj:
+            obj_avito = OBJECTS_DATA[matched_avito_obj]
+            update_user_state(
+                chat_id,
+                scenario="avito",
+                step="AWAITING_DOCS_OR_PHONE",
+                object=matched_avito_obj,
+                deal_id=avito_deal_id,
+                name=name
+            )
+            greeting_avito = (
+                f"Здравствуйте, {name}! Рады вашему отклику на вакансию «{obj_avito['title']}» на Авито. 👍\n\n"
+                f"{obj_avito['excerpt']}\n\n"
+                "────────────────────────\n"
+                "Для согласования службой безопасности завода и бронирования бесплатной квартиры, "
+                "отправьте, пожалуйста, два четких фото:\n"
+                "1️⃣ Главный разворот паспорта (2–3 страница с вашей фотографией)\n"
+                "2️⃣ Разворот со штампом прописки (регистрации)\n\n"
+                "И напишите ваш номер телефона для связи!"
+            )
+            send_message(chat_id, greeting_avito)
+            hist.append({"role": "model", "text": greeting_avito})
+            return
+
+        is_start_cmd = text.lower() in ["/start", "старт", "начать", "меню", "привет", "здравствуйте", "добрый день", "добрый вечер"] or "/start" in text.lower() or "sms" in start_payload.lower() or "utm" in text.lower()
+
+        if is_start_cmd and st.get("step") == "AWAITING_OBJECT":
+            send_message(chat_id, WELCOME_TEXT, KEYBOARD)
+            hist.append({"role": "model", "text": WELCOME_TEXT})
+            return
+
+        # -------------------------------------------------------------
+        # 5. НЕТИПИЧНЫЕ ВОПРОСЫ / ВОЗРАЖЕНИЯ -> GEMINI LLM
+        # -------------------------------------------------------------
+        # Если кандидат пишет любой нестандартный текст («а если долги?», «я боюсь», «сколько вычетов?»)
+        # Подключаем живой LLM, который отвечает на вопрос и возвращает к активному шагу!
+        active_step = st.get("step", "AWAITING_OBJECT")
+        cur_obj = OBJECTS_DATA.get(st.get("object", "abi"), OBJECTS_DATA["abi"])
+        
+        hint = f"Кандидат находится на шаге {active_step}. Выбранный объект: {cur_obj['title']}."
+        if active_step == "AWAITING_PHONE":
+            hint += " После ответа на вопрос кандидата мягко попроси его написать номер телефона для брони места."
+        elif active_step == "AWAITING_DOCS":
+            hint += " После ответа на вопрос мягко напомни прислать фото паспорта (главный разворот и прописку)."
+        elif active_step == "AWAITING_OBJECT":
+            hint += " После ответа предложи выбрать один из 4 объектов (Владимир, Кашира, Подольск, Балашиха)."
+
+        ai_reply = call_gemini_llm(hist, text, context_hint=hint)
+        if ai_reply:
+            send_message(chat_id, ai_reply)
+            hist.append({"role": "model", "text": ai_reply})
+            return
+
+        # Fallback напоминание по шагам воронки
+        if active_step == "AWAITING_PHONE":
+            rem = (
+                f"Чтобы координатор ответил на все ваши вопросы по объекту «{cur_obj['title']}» "
+                "и закрепил за вами место — напишите, пожалуйста, ваш номер телефона для связи."
+            )
+            send_message(chat_id, rem)
+        elif active_step == "AWAITING_DOCS":
+            rem = "Подскажите, получилось сделать фото разворота паспорта и страницы с пропиской?"
+            send_message(chat_id, rem)
+        else:
+            send_message(chat_id, WELCOME_TEXT, KEYBOARD)
+
+
 def bot_worker_loop():
+    """Фоновый цикл Long Polling как надежный резерв (с сохранением маркера в SQLite)."""
     init_db()
     print("=== MAX BOT UNIFIED ENTERPRISE ENGINE STARTED ===", flush=True)
-    marker = None
+    marker_str = get_meta("last_marker")
+    marker = int(marker_str) if marker_str and marker_str.isdigit() else None
+    if marker:
+        print(f"[MAX BOT POLLER] Восстановлен сохраненный маркер из БД: {marker}", flush=True)
     
     while True:
         try:
@@ -500,336 +899,23 @@ def bot_worker_loop():
             with urllib.request.urlopen(req, timeout=35, context=ctx) as r:
                 data = json.loads(r.read().decode('utf-8'))
                 
-            marker = data.get("marker", marker)
-            updates = data.get("updates", [])
-            
-            for up in updates:
-                u_type = up.get("update_type")
+            new_marker = data.get("marker")
+            if new_marker:
+                marker = new_marker
+                set_meta("last_marker", marker)
                 
-                # =========================================================
-                # 1. ОБРАБОТКА ИНЛАЙН-КНОПКИ ВЫБОРА ОБЪЕКТА
-                # =========================================================
-                if u_type == "message_callback":
-                    cb = up.get("callback", {})
-                    cb_id = cb.get("callback_id")
-                    payload = cb.get("payload", "")
-                    sender = up.get("sender") or cb.get("user") or {}
-                    user_id = sender.get("user_id")
-                    rec = up.get("message", {}).get("recipient", {})
-                    chat_type = rec.get("chat_type")
-                    chat_id = rec.get("chat_id") or user_id
-                    name = sender.get("name") or sender.get("first_name") or "Кандидат"
-                    
-                    if chat_type and chat_type != "dialog":
-                        continue
-                    if (isinstance(chat_id, int) and chat_id <= 0) or str(chat_id).startswith("-"):
-                        continue
-                    
-                    if payload in OBJECTS_DATA and chat_id:
-                        obj = OBJECTS_DATA[payload]
-                        if cb_id:
-                            answer_callback(cb_id, f"Выбран: {obj['title']}")
-                            
-                        update_user_state(
-                            chat_id,
-                            scenario="sms",
-                            step="AWAITING_PHONE",
-                            object=payload,
-                            name=name
-                        )
-                        
-                        # ЕДИНОЕ емкое сообщение без дублирования
-                        msg = (
-                            f"Отличный выбор! {obj['excerpt']}\n\n"
-                            "────────────────────────\n"
-                            "⚠️ На ближайший заезд осталось всего 3 свободных места!\n"
-                            "📞 Напишите ваш номер телефона — менеджер сразу закрепит за вами бронь места:"
-                        )
-                        send_message(chat_id, msg)
-                        continue
-
-                # =========================================================
-                # 2. ВХОДЯЩЕЕ СООБЩЕНИЕ / ФОТО / СТАРТ
-                # =========================================================
-                elif u_type in ["message_created", "bot_started"]:
-                    msg = up.get("message", {})
-                    sender = msg.get("sender") or up.get("user") or {}
-                    if sender.get("is_bot"):
-                        continue
-                        
-                    user_id = sender.get("user_id")
-                    rec = msg.get("recipient", {})
-                    chat_type = rec.get("chat_type")
-                    chat_id = rec.get("chat_id") or up.get("chat_id") or user_id
-                    name = sender.get("name") or f"{sender.get('first_name', '')} {sender.get('last_name', '')}".strip() or "Кандидат"
-                    
-                    if chat_type and chat_type != "dialog":
-                        continue
-                    if not chat_id or (isinstance(chat_id, int) and chat_id <= 0) or str(chat_id).startswith("-"):
-                        continue
-                        
-                    body = msg.get("body", {})
-                    mid = body.get("mid")
-                    text = (body.get("text") or "").strip()
-                    attachments = body.get("attachments", [])
-                    start_payload = up.get("payload") or ""
-                    
-                    st = get_user_state(chat_id, user_id=user_id, name=name)
-                    
-                    # Защита от дублей одного и того же mid
-                    if mid and st.get("last_mid") == mid:
-                        continue
-                    if mid:
-                        update_user_state(chat_id, last_mid=mid)
-                        
-                    # Сохраняем в историю чата для LLM
-                    hist = CHAT_HISTORIES.setdefault(chat_id, [])
-                    if text:
-                        hist.append({"role": "user", "text": text})
-
-                    # Определение прикрепленного фото
-                    has_photo = any(att.get("type") in ["image", "photo", "file"] for att in attachments)
-                    photo_url = None
-                    if has_photo:
-                        photo_att = next((att for att in attachments if att.get("type") in ["image", "photo", "file"]), None)
-                        photo_url = photo_att.get("payload", {}).get("url") if photo_att else None
-
-                    # Проверка на телефон в тексте
-                    phone = extract_phone(text)
-
-                    # -------------------------------------------------------------
-                    # 1. ОБРАБОТКА ФОТО ДОКУМЕНТОВ ЧЕРЕЗ GEMINI VISION
-                    # -------------------------------------------------------------
-                    if has_photo and photo_url:
-                        print(f"[GEMINI VISION] Проверяем входящее фото для чата {chat_id}...", flush=True)
-                        doc_check = check_document_vision(photo_url)
-                        print(f"[GEMINI VISION РЕЗУЛЬТАТ]: {doc_check}", flush=True)
-
-                        is_pass = doc_check.get("is_passport")
-                        dtype = doc_check.get("doc_type")
-                        desc = doc_check.get("description", "изображение")
-
-                        # А. Если это НЕ паспорт (дверь, улица, интерьер, случайное фото)
-                        if not is_pass or dtype == "not_a_document":
-                            reply = (
-                                f"Спасибо за снимок! Но на фото не видно паспорта (кажется, это {desc}).\n\n"
-                                "Для службы безопасности режимного завода и оформления пропуска на КПП нам требуются именно официальные документы:\n"
-                                "1️⃣ Главный разворот паспорта (2–3 страница с вашей фотографией)\n"
-                                "2️⃣ Разворот с действующей пропиской (штамп регистрации)\n\n"
-                                "Пожалуйста, сфотографируйте и пришлите разворот паспорта!"
-                            )
-                            send_message(chat_id, reply)
-                            hist.append({"role": "model", "text": reply})
-                            continue
-
-                        # Б. Это главный разворот паспорта (2-3 стр)
-                        elif dtype == "main_page":
-                            update_user_state(chat_id, has_main_page=1)
-                            st["has_main_page"] = 1
-                            
-                            if not st.get("has_reg_page"):
-                                reply = (
-                                    "Главный разворот паспорта принят! 👍\n\n"
-                                    "Теперь пришлите, пожалуйста, второе фото — разворот с действующей пропиской (штамп регистрации), "
-                                    "чтобы служба безопасности завершила оформление пропуска."
-                                )
-                                send_message(chat_id, reply)
-                                hist.append({"role": "model", "text": reply})
-                                continue
-                            else:
-                                reply = (
-                                    "Отлично, все необходимые документы получены! Передал их в службу безопасности на оформление пропуска.\n\n"
-                                    "В течение 15–30 минут менеджер свяжется с вами по телефону для подтверждения деталей заезда!"
-                                )
-                                update_user_state(chat_id, step="COMPLETED")
-                                send_message(chat_id, reply)
-                                hist.append({"role": "model", "text": reply})
-                                continue
-
-                        # В. Это страница прописки / регистрации
-                        elif dtype == "registration_page":
-                            update_user_state(chat_id, has_reg_page=1)
-                            st["has_reg_page"] = 1
-
-                            if not st.get("has_main_page"):
-                                reply = (
-                                    "Страница со штампом прописки принята! 👍\n\n"
-                                    "Теперь пришлите, пожалуйста, фото главного разворота паспорта (2–3 страница с вашей фотографией)."
-                                )
-                                send_message(chat_id, reply)
-                                hist.append({"role": "model", "text": reply})
-                                continue
-                            else:
-                                reply = (
-                                    "Отлично, все необходимые документы получены! Передал их в службу безопасности на оформление пропуска.\n\n"
-                                    "В течение 15–30 минут менеджер свяжется с вами по телефону для подтверждения деталей заезда!"
-                                )
-                                update_user_state(chat_id, step="COMPLETED")
-                                send_message(chat_id, reply)
-                                hist.append({"role": "model", "text": reply})
-                                continue
-                        else:
-                            # Другой документ
-                            reply = (
-                                "Фото получено! Проверьте, пожалуйста, чтобы было четко видно главный разворот паспорта с фото "
-                                "и страницу с пропиской для согласования службой безопасности завода."
-                            )
-                            send_message(chat_id, reply)
-                            continue
-
-                    # -------------------------------------------------------------
-                    # 2. ЕСЛИ СОИСКАТЕЛЬ ПРИСЛАЛ НОМЕР ТЕЛЕФОНА
-                    # -------------------------------------------------------------
-                    if phone:
-                        obj_k = st.get("object", "abi")
-                        obj_info = OBJECTS_DATA.get(obj_k, OBJECTS_DATA["abi"])
-                        did = create_b24_deal(name, phone, obj_k)
-                        
-                        update_user_state(
-                            chat_id,
-                            phone=phone,
-                            deal_id=did,
-                            step="AWAITING_DOCS"
-                        )
-                        
-                        reply = (
-                            f"Спасибо! Номер {phone} принят, место на объекте «{obj_info['title']}» забронировано за вами! 👍\n\n"
-                            "Чтобы служба безопасности завода выписала электронный пропуск на КПП и координатор подготовил заселение в комфортную квартиру, "
-                            "отправьте, пожалуйста, два четких фото:\n"
-                            "1️⃣ Главный разворот паспорта (2–3 страница с вашей фотографией)\n"
-                            "2️⃣ Разворот со штампом прописки (регистрации)\n\n"
-                            "Жду фото документов!"
-                        )
-                        send_message(chat_id, reply)
-                        hist.append({"role": "model", "text": reply})
-                        continue
-
-                    # -------------------------------------------------------------
-                    # 3. ВЫБОР ОБЪЕКТА ЦИФРОЙ ИЛИ НАЗВАНИЕМ (1, 2, 3, 4)
-                    # -------------------------------------------------------------
-                    num_map = {"1": "abi", "2": "tepofol", "3": "alfa", "4": "smart"}
-                    matched_key = None
-                    for num, k in num_map.items():
-                        if text == num or text.startswith(num + ".") or text.startswith(num + ")"):
-                            matched_key = k
-                            break
-                    if not matched_key:
-                        t_low = text.lower()
-                        if "аби" in t_low or "владимир" in t_low: matched_key = "abi"
-                        elif "тепофол" in t_low or "кашир" in t_low: matched_key = "tepofol"
-                        elif "альфа" in t_low or "техформ" in t_low or "подольск" in t_low or "климовск" in t_low: matched_key = "alfa"
-                        elif "смарт" in t_low or "балаших" in t_low: matched_key = "smart"
-
-                    if matched_key:
-                        obj = OBJECTS_DATA[matched_key]
-                        update_user_state(
-                            chat_id,
-                            scenario="sms",
-                            step="AWAITING_PHONE",
-                            object=matched_key,
-                            name=name
-                        )
-                        msg = (
-                            f"Отличный выбор! {obj['excerpt']}\n\n"
-                            "────────────────────────\n"
-                            "⚠️ На ближайший заезд осталось всего 3 свободных места!\n"
-                            "📞 Напишите ваш номер телефона — менеджер сразу закрепит за вами бронь места:"
-                        )
-                        send_message(chat_id, msg)
-                        hist.append({"role": "model", "text": msg})
-                        continue
-
-                    # -------------------------------------------------------------
-                    # 4. ОБНАРУЖЕНИЕ СТАРТА / АВИТО / РАССЫЛКИ
-                    # -------------------------------------------------------------
-                    full_payload = (start_payload or "").strip()
-                    if text.startswith("/start "):
-                        full_payload = text.replace("/start ", "").strip()
-                    elif text.startswith("/start"):
-                        full_payload = text.replace("/start", "").strip()
-
-                    # Проверяем, пришел ли кандидат с Авито по конкретной вакансии (например: abi_95420 или tepofol_95421)
-                    matched_avito_obj = None
-                    avito_deal_id = None
-                    for k in ["abi", "tepofol", "alfa", "smart"]:
-                        if k in full_payload.lower():
-                            matched_avito_obj = k
-                            m_d = re.search(r'\d+', full_payload)
-                            if m_d:
-                                avito_deal_id = int(m_d.group(0))
-                            break
-
-                    if matched_avito_obj:
-                        obj_avito = OBJECTS_DATA[matched_avito_obj]
-                        update_user_state(
-                            chat_id,
-                            scenario="avito",
-                            step="AWAITING_DOCS_OR_PHONE",
-                            object=matched_avito_obj,
-                            deal_id=avito_deal_id,
-                            name=name
-                        )
-                        greeting_avito = (
-                            f"Здравствуйте, {name}! Рады вашему отклику на вакансию «{obj_avito['title']}» на Авито. 👍\n\n"
-                            f"{obj_avito['excerpt']}\n\n"
-                            "────────────────────────\n"
-                            "Для согласования службой безопасности завода и бронирования бесплатной квартиры, "
-                            "отправьте, пожалуйста, два четких фото:\n"
-                            "1️⃣ Главный разворот паспорта (2–3 страница с вашей фотографией)\n"
-                            "2️⃣ Разворот со штампом прописки (регистрации)\n\n"
-                            "И напишите ваш номер телефона для связи!"
-                        )
-                        send_message(chat_id, greeting_avito)
-                        hist.append({"role": "model", "text": greeting_avito})
-                        continue
-
-                    is_start_cmd = text.lower() in ["/start", "старт", "начать", "меню", "привет", "здравствуйте", "добрый день", "добрый вечер"] or "/start" in text.lower() or "sms" in start_payload.lower() or "utm" in text.lower()
-
-                    if is_start_cmd and st.get("step") == "AWAITING_OBJECT":
-                        send_message(chat_id, WELCOME_TEXT, KEYBOARD)
-                        hist.append({"role": "model", "text": WELCOME_TEXT})
-                        continue
-
-                    # -------------------------------------------------------------
-                    # 5. НЕТИПИЧНЫЕ ВОПРОСЫ / ВОЗРАЖЕНИЯ -> GEMINI LLM
-                    # -------------------------------------------------------------
-                    # Если кандидат пишет любой нестандартный текст («а если долги?», «я боюсь», «сколько вычетов?»)
-                    # Подключаем живой LLM, который отвечает на вопрос и возвращает к активному шагу!
-                    active_step = st.get("step", "AWAITING_OBJECT")
-                    cur_obj = OBJECTS_DATA.get(st.get("object", "abi"), OBJECTS_DATA["abi"])
-                    
-                    hint = f"Кандидат находится на шаге {active_step}. Выбранный объект: {cur_obj['title']}."
-                    if active_step == "AWAITING_PHONE":
-                        hint += " После ответа на вопрос кандидата мягко попроси его написать номер телефона для брони места."
-                    elif active_step == "AWAITING_DOCS":
-                        hint += " После ответа на вопрос мягко напомни прислать фото паспорта (главный разворот и прописку)."
-                    elif active_step == "AWAITING_OBJECT":
-                        hint += " После ответа предложи выбрать один из 4 объектов (Владимир, Кашира, Подольск, Балашиха)."
-
-                    ai_reply = call_gemini_llm(hist, text, context_hint=hint)
-                    if ai_reply:
-                        send_message(chat_id, ai_reply)
-                        hist.append({"role": "model", "text": ai_reply})
-                        continue
-
-                    # Fallback напоминание по шагам воронки
-                    if active_step == "AWAITING_PHONE":
-                        rem = (
-                            f"Чтобы координатор ответил на все ваши вопросы по объекту «{cur_obj['title']}» "
-                            "и закрепил за вами место — напишите, пожалуйста, ваш номер телефона для связи."
-                        )
-                        send_message(chat_id, rem)
-                    elif active_step == "AWAITING_DOCS":
-                        rem = "Подскажите, получилось сделать фото разворота паспорта и страницы с пропиской?"
-                        send_message(chat_id, rem)
-                    else:
-                        send_message(chat_id, WELCOME_TEXT, KEYBOARD)
+            updates = data.get("updates", [])
+            for up in updates:
+                try:
+                    handle_single_update(up)
+                except Exception as e_up:
+                    print(f"[MAX BOT UPDATE ERR]: {e_up}", flush=True)
 
         except urllib.error.URLError:
             pass # Timeout on long polling is normal
         except Exception as e:
             print(f"[BOT WORKER EXCEPTION]: {e}", flush=True)
-            time.sleep(1)
+            time.sleep(2)
 
 
 # --- NATIVE HTTP SERVER FOR RENDER HEALTHCHECK ---
