@@ -1,17 +1,17 @@
 # -*- coding: utf-8 -*-
 """
-MAX MESSENGER AUTONOMOUS RECRUITER BOT (UNIFIED ENTERPRISE EDITION)
-1. Native HTTP Healthcheck server for Render 24/7 uptime.
-2. Background thread with Long Polling for @id9729371578_bot.
-3. Dual-scenario state machine:
-   - Scenario 1: SMS Campaign (UTM / deep-link / button selection): Sequential funnel (Object -> Phone -> B24 Deal -> 2 Photos).
-   - Scenario 2: Organic candidate: Live AI Recruiter via Gemini LLM.
-4. Intelligent fallback & interruption handling:
-   - When candidate asks non-typical questions/objections on ANY step, Gemini LLM handles it and gracefully guides back to the active step.
-5. Gemini Vision Verification:
-   - Strictly verifies that images are passport main spread (2-3 page) and registration page. Random/non-document photos are politely rejected.
-6. Strict single-message response policy (no message spam).
-7. Strict corporate apartments policy (no 'общежитие', no 'хостел', no 'нары', no '0 ₽ вычетов').
+MAX MESSENGER ENTERPRISE AI-RECRUITER (PURE LLM-NATIVE ARCHITECTURE)
+Архитектура уровня Тинькофф / Купибилет / Авиасейлс:
+1. Нейросеть (Gemini LLM) — ЕДИНСТВЕННЫЙ МОЗГ каждого ответа. Никаких сотен примитивных if/else и скриптов.
+2. Вся переписка хранится в SQLite как непрерывная хронологическая нить (End-to-End Context).
+3. Нейросеть мгновенно улавливает контекст, сарказм, исправления («я брату ищу, а не себе!»), эмоции и отвечает по-человечески.
+4. Жесткие регламенты компании вшиты в системный промпт:
+   - Прием СТРОГО от 20 до 55 лет (18-19 лет вежливо отклонять, доступ СБ закрыт).
+   - Гражданство СТРОГО РФ (действующий паспорт РФ).
+   - Проживание: ТОЛЬКО комфортные бесплатные корпоративные квартиры (слова «общежитие», «хостел», «нары» запрещены).
+   - Акция «Приведи друга / родственника»: официальный бонус 5 000 – 10 000 ₽ на карту за брата/друга/мужа.
+   - Паспорт: только четкое, чистое фото разворота 2-3 и прописки. КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО предлагать замазать серию/номер или водяные знаки.
+5. Технический бэкенд в фоне: Gemini Vision для анализа фото и авто-создание сделки в Битрикс24 при обнаружении телефона.
 """
 import sys
 import os
@@ -22,11 +22,10 @@ import threading
 import urllib.request
 import urllib.error
 import ssl
-import http.server
 import base64
 import sqlite3
 
-# UTF-8 stdout configuration
+# Настройка UTF-8 вывода
 if sys.stdout is not None:
     try:
         sys.stdout.reconfigure(encoding='utf-8', line_buffering=True)
@@ -42,8 +41,8 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", _DEF_KEY)
 PRIMARY_MODEL = "gemini-3.1-flash-lite"
 BACKUP_MODEL = "gemini-3.1-flash-lite-preview"
 
-# Rotation among the 3 girl managers
-GIRLS_QUEUE = ["81596", "84102", "84822"] # Margarita (81596), Anastasia (84102), Anna (84822)
+# Распределение сделок между 3 менеджерами (Маргарита, Анастасия, Анна)
+GIRLS_QUEUE = ["81596", "84102", "84822"]
 current_girl_idx = 0
 
 ctx = ssl.create_default_context()
@@ -52,265 +51,87 @@ ctx.verify_mode = ssl.CERT_NONE
 
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bot_state.db")
 
-OBJECTS_DATA = {
-    "abi": {
-        "title": "АБИ (г. Владимир)",
-        "code": "АБИ Владимир",
-        "btn_text": "1. г. Владимир — от 3 700 до 4 900 ₽ (АБИ)",
-        "excerpt": (
-            "Вахта в г. Владимир на пищевое производство «Стародворские колбасы»:\n\n"
-            "• Ставка: от 3 700 до 4 900 ₽/смена (от 129 500 ₽ за 35 смен чистыми)\n"
-            "• Питание: бесплатное горячее 3 раза в день в столовой\n"
-            "• Проживание: бесплатное в комфортных квартирах со всеми удобствами\n"
-            "• Авансы: еженедельно 5 000 ₽, усиленный аванс до 20 000 ₽\n"
-            "• Билеты: дистанционная покупка электронного билета на поезд или компенсация проезда до 5 000 ₽\n"
-            "• Спецодежда: выдается бесплатно, по приезду во Владимир встречает координатор"
-        )
-    },
-    "tepofol": {
-        "title": "Тепофол (МО, г. Кашира)",
-        "code": "Тепофол вахта",
-        "btn_text": "2. МО, г. Кашира — 3 800 ₽ вахта / 4 000 ₽ местные",
-        "excerpt": (
-            "Завод теплоизоляции Тепофол (МО, г. Кашира):\n"
-            "Продукция легкая (вспененный полиэтилен), чистое производство без стекловаты и пыли!\n\n"
-            "• Вахта: 35 смен — ставка 3 800 ₽/смена (133 000 ₽ чистыми), для местных: 4 000 ₽/смена\n"
-            "• Проживание: бесплатные уютные 2-комнатные квартиры со всеми удобствами\n"
-            "• Питание: бесплатное горячее 2 раза в день на смене\n"
-            "• Авансы: еженедельно 5 000 ₽ по понедельникам (на 3-й неделе усиленный до 20 000 ₽)\n"
-            "• Дорога: компенсация проезда до 5 000 ₽ в первую зарплату + оплата такси до объекта"
-        )
-    },
-    "alfa": {
-        "title": "Альфатехформ (МО, Подольск / Климовск)",
-        "code": "Альфатехформ",
-        "btn_text": "3. МО, Подольск — 3 700 ₽ (Альфатехформ)",
-        "excerpt": (
-            "Производство пластиковой упаковки Альфатехформ (г. Подольск / Климовск):\n"
-            "Спокойная работа: контроль качества и упаковка (без тяжестей, мужчины и женщины).\n\n"
-            "• Вахта: 35 смен — ставка 3 700 ₽/смена (129 500 ₽ за 35 смен чистыми)\n"
-            "• График: только ДНЕВНЫЕ смены с 9:00 до 21:00 (ночных смен нет!)\n"
-            "• Питание: бесплатное горячее 2 раза в день\n"
-            "• Проживание: бесплатные комфортные квартиры рядом с работой\n"
-            "• Авансы: еженедельно 5 000 ₽, компенсация проезда до 5 000 ₽"
-        )
-    },
-    "smart": {
-        "title": "Смарт Family (МО, г. Балашиха)",
-        "code": "Смарт Family вахта",
-        "btn_text": "4. МО, г. Балашиха — Смарт Family",
-        "excerpt": (
-            "Склад зоотоваров Смарт Family (МО, г. Балашиха / ст. Кучино):\n"
-            "Теплый современный чистый склад товаров для животных (корма, аксессуары).\n\n"
-            "• Выплаты: ЕЖЕДНЕВНО для местных (3 600 - 3 900 ₽) или вахта от 15 до 45 смен\n"
-            "• Ставка на вахте: до 3 710 ₽/смена (до 166 950 ₽ за 45 смен)\n"
-            "• Проживание: бесплатные 2-комнатные квартиры в шаговой доступности (7-10 мин)\n"
-            "• Транспорт: бесплатный корпоративный автобус от м. Новогиреево и ж/д станций\n"
-            "• Авансы: еженедельно 5 000 ₽ (первый аванс уже после 3-й смены)"
-        )
-    }
-}
+# -------------------------------------------------------------
+# БАЗА ЗНАНИЙ ОБЪЕКТОВ КОМПАНИИ GSM LOGISTICS
+# -------------------------------------------------------------
+OBJECTS_KNOWLEDGE = """
+НАШИ 4 ФЛАГМАНСКИХ ОБЪЕКТА (ПРЯМОЙ РАБОТОДАТЕЛЬ GSM LOGISTICS):
 
-WELCOME_TEXT = """Здравствуйте! Вы перешли по поводу работы на вахту с бесплатным проживанием в комфортных квартирах и питанием.
+1. АБИ / Стародворские колбасы / Вязанка (г. Владимир):
+• Производство колбас и мясных изделий (упаковка, фасовка, стикеровка, рохли).
+• Ставка: от 3 700 до 4 900 ₽ за смену чистыми (за вахту 35 смен чистый доход 129 500 – 171 500 ₽).
+• Бесплатное 3-разовое горячее сытное питание в столовой (завтрак, обед, ужин).
+• Бесплатное проживание в комфортных современных корпоративных квартирах со всеми удобствами (кухня, Wi-Fi, стиральная машина, чистые комнаты). Никаких вычетов из зарплаты за жилье нет!
+• Компенсация проезда до 5 000 ₽ + встреча на вокзале на такси.
+• Медкнижка оформляется на месте бесплатно за счет компании.
 
-Прямо сейчас места открыты на 4 прямых объектах:
-────────────────────────
+2. Завод утеплителя Тепофол (Московская область, г. Кашира):
+• Современное чистое производство рулонного утеплителя из вспененного полиэтилена (рулоны легкие по 5–7 кг, без стекловаты, без пыли).
+• Ставка: 3 800 ₽ за смену чистыми (за вахту 35 смен — 133 000 ₽ на руки).
+• Бесплатное 2-разовое горячее питание от шеф-повара (обед и ужин) прямо на заводе.
+• Бесплатное проживание в уютных 2-3 комнатных квартирах в Кашире.
+• Компенсация дороги до 5 000 ₽ + такси по прибытии. Медкнижка не нужна!
 
-1️⃣ г. Владимир — Пищевой комбинат АБИ
-• Ставка: от 3 700 до 4 900 ₽/смена (от 129 500 ₽ за 35 смен)
-• Бесплатное 3-разовое питание, квартиры, билет покупаем
+3. Склад автозапчастей Альфа (Московская область, г. Подольск / Климовск):
+• Чистый склад автозапчастей (приемка, сортировка, маркировка, размещение коробок по ячейкам со сканером ТСД).
+• Ставка: от 3 800 до 4 200 ₽ за смену (133 000 – 147 000 ₽ за 35 смен).
+• Бесплатное проживание в благоустроенных корпоративных квартирах со всей техникой.
+• Еженедельные авансы по 5 000 ₽. Медкнижка не нужна!
 
-2️⃣ МО, г. Кашира — Завод утеплителя Тепофол
-• Вахта: 3 800 ₽/смена (133 000 ₽ чистыми), местные: 4 000 ₽
-• Бесплатные 2-комнатные квартиры, горячее питание 2 раза
+4. Склад зоотоваров Petshop / Смарт Family (Московская область, г. Балашиха / ст. Кучино):
+• Комплектация и упаковка товаров для домашних животных (корма, аксессуары, игрушки со сканером ТСД).
+• Сухой, теплый, светлый склад.
+• Вариант ВАХТА (с бесплатным проживанием в квартирах в 7 минутах пешком от склада): ставки от 3 550 до 3 710 ₽ за смену (124 250 – 166 950 ₽ за вахту).
+• Вариант МЕСТНАЯ ПОДРАБОТКА (для жителей Москвы и МО): ЕЖЕДНЕВНЫЕ выплаты сразу на карту (женщины 3 600 ₽, мужчины 3 900 ₽). Свободный график.
+"""
 
-3️⃣ МО, Подольск / Климовск — Завод Альфатехформ
-• Ставка: 3 700 ₽/смена (129 500 ₽ за 35 смен)
-• Только дневные смены, 2-разовое питание, комфортное жилье
+SYSTEM_PROMPT_ENTERPRISE_RECRUITER = f"""Ты — Валерия, старший специалист службы заботы и подбора персонала прямого работодателя GSM Logistics.
+Ты ведешь живой, уважительный, естественный и дружелюбный диалог с кандидатом в мессенджере МАКС, как топовый сотрудник службы поддержки Купибилет, Тинькофф или Авиасейлс.
 
-4️⃣ МО, г. Балашиха — Склад зоотоваров Смарт Family
-• Ставка: от 3 600 до 4 200 ₽/смена
-• Выплаты ежедневно или вахта, бесплатные квартиры, автобус от метро
+{OBJECTS_KNOWLEDGE}
 
-────────────────────────
-Выберите подходящий объект на кнопках ниже или напишите цифру 1, 2, 3 или 4:"""
+ТВОИ СТРОЖАЙШИЕ ПРАВИЛА И РЕГЛАМЕНТЫ (ЭТО ЗАКОН КОМПАНИИ):
 
-KEYBOARD = [
-    [{"type": "callback", "text": OBJECTS_DATA["abi"]["btn_text"], "payload": "abi"}],
-    [{"type": "callback", "text": OBJECTS_DATA["tepofol"]["btn_text"], "payload": "tepofol"}],
-    [{"type": "callback", "text": OBJECTS_DATA["alfa"]["btn_text"], "payload": "alfa"}],
-    [{"type": "callback", "text": OBJECTS_DATA["smart"]["btn_text"], "payload": "smart"}]
-]
+1. ВОЗРАСТНОЙ ЦЕНЗ — СТРОГО ОТ 20 ДО 55 ЛЕТ:
+• Служба безопасности (СБ) режимных производств согласовывает кандидатов СТРОГО в возрасте от 20 до 55 лет.
+• КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО принимать или обнадеживать кандидатов младше 20 лет (18 и 19 лет)!
+• Если кандидат говорит «мне 18/19», «берете с 18?», «со скольки лет»:
+  ОТВЕЧАЙ ВЕЖЛИВО, НО ТВЕРДО: служба безопасности согласовывает пропуска строго с 20 лет, поэтому выписать пропуск в 18–19 лет мы не сможем. С радостью примем в команду, как только исполнится 20 лет!
+• Никаких компромиссов по возрасту нет.
+
+2. ГРАЖДАНСТВО:
+• Строго граждане РФ с паспортом РФ на руках (режимные объекты и электронные пропуска).
+
+3. ПРОЖИВАНИЕ — ТОЛЬКО КОМФОРТНЫЕ КОРПОРАТИВНЫЕ КВАРТИРЫ:
+• КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО использовать слова: «общежитие», «хостел», «нары», «койко-место», «0 ₽ вычетов»!
+• Пиши исключительно: «бесплатное проживание в чистых, комфортных корпоративных квартирах со всеми удобствами: стиральная машина, оборудованная кухня, Wi-Fi, раздельные комнаты». За проживание из зарплаты не вычитается ни рубля.
+
+4. АКЦИЯ «ПРИВЕДИ ДРУГА / РОДСТВЕННИКА» (БОНУСЫ):
+• Если кандидат спрашивает про родственника (брата, мужа, сына, друга) и бонус:
+  ОТВЕЧАЙ: «Да, конечно! У нас действует официальная акция „Приведи друга“ — вы получаете бонус от 5 000 до 10 000 ₽ на карту за каждого родственника или знакомого, который отработает вахту!»
+• Если брату/другу 20–55 лет (например, 25 лет) — подтверждай: «По возрасту 25 лет он подходит идеально!»
+• Проси номер телефона брата и его имя для бронирования места и начисления бонуса.
+
+5. ПАСПОРТ И ПРОВЕРКА СЛУЖБОЙ БЕЗОПАСНОСТИ:
+• Для брони места и оформления электронного пропуска на КПП завода требуются четкие фото:
+  1) Главный разворот паспорта (2–3 страницы с фото и кем выдан)
+  2) Страница со штампом регистрации (прописки)
+• СТРОГО ЗАПРЕЩЕНО предлагать замазать серию/номер или наложить водяной знак! Служба безопасности завода проверяет подлинность документа по базам МВД, фото должно быть четким, без бликов и закрытых пальцами углов.
+
+6. ВНИМАНИЕ К КОНТЕКСТУ ДИАЛОГА:
+• Внимательно читай ВСЮ историю переписки!
+• Если кандидат уточняет («я брату ищу, а не себе», «я же только что написала», «ответь на вопрос») — сразу перестраивайся, извиняйся за накладку и отвечай именно на его вопрос! Не выдавай шаблонную рекламу повторно.
+• Различай, для кого подбирают: если женщина пишет про брата или мужа — условия адресуй брату («для него ставка... заселим его...»).
+
+7. СТИЛЬ ОБЩЕНИЯ И ЦЕЛЬ:
+• Ответы емкие, доброжелательные, живые (2–4 предложения, без канцелярщины и водяных простыней).
+• Финальная цель каждого этапа — снять любые сомнения, ответить на вопрос и мягко запросить номер телефона для брони места либо фото документов для проверки СБ.
+"""
 
 
-SYSTEM_INSTRUCTION_RECRUITER = """Ты — опытный, заботливый и доброжелательный рекрутер компании по прямому трудоустройству на вахту в Москве, МО и Владимире.
-Твоя цель: помочь кандидату устроиться, снять любые страхи и сомнения, объяснить условия и получить телефон либо фото документов (главный разворот паспорта и прописка) для службы безопасности и бронирования места в корпоративных квартирах.
-
-СТРОГИЕ ТРЕБОВАНИЯ К ФОРМУЛИРОВКАМ:
-- ПРОЖИВАНИЕ: У нас КВАРТИРЫ! КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО использовать слова «общежитие», «койко-место», «хостел», «нары», «0 рублей вычетов».
-  Всегда пиши: «бесплатное проживание в комфортных квартирах со всеми удобствами: чистые комнаты, кухня, стиральная машина, Wi-Fi. Никаких вычетов из зарплаты за жилье нет».
-
-КЛЮЧЕВЫЕ ПРАВИЛА:
-1. Пиши ЖИВЫМ ЧЕЛОВЕЧЕСКИМ ЯЗЫКОМ, емко (2-4 предложения), чтобы кандидату было легко прочитать на телефоне.
-2. ЕСЛИ КАНДИДАТ БОИТСЯ ОТПРАВЛЯТЬ ПАСПОРТ:
-   - Прояви эмпатию: «Прекрасно вас понимаю, сейчас в интернете нужно быть осторожным!»
-   - Объясни причину: «Наши объекты — закрытые режимные предприятия. Служба безопасности завода проверяет данные для официального электронного пропуска на КПП и бронирования квартиры. По закону РФ (152-ФЗ) данные строго защищены, а взять кредит по фото невозможно — требуется личное присутствие или подтверждение через Госуслуги».
-   - КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО: предлагать замазывать, закрывать серию/номер, ставить водяные знаки или идти на компромиссы. Охрана режимного завода согласует СТРОГО полное, четкое и читаемое фото паспорта без замазываний! С закрытыми данными пропуск выписан не будет. Если кандидат сомневается — предложи короткий телефонный звонок координатора.
-3. ЕСЛИ ФССП / ПРИСТАВЫ / ДОЛГИ:
-   - Успокой: зарплату можно получать на карту любого близкого (жены, мамы, брата), приставы не спишут ни рубля. СБ проверяет только судимости.
-4. ЕСЛИ СПРАШИВАЮТ ПРО БИЛЕТЫ:
-   - Компенсируем проезд до 5 000 рублей, либо координатор покупает электронный билет на поезд.
-5. ЕСЛИ СЕМЕЙНАЯ ПАРА:
-   - Заселяем вместе в отдельные семейные комнаты в квартире, ставим в одну смену с общими выходными.
-6. ВОЗРАСТНЫЕ ОГРАНИЧЕНИЯ (СТРОГО):
-   - ПРИНИМАЕМ СТРОГО С 20 ДО 55 ЛЕТ!
-   - КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО брать кандидатов моложе 20 лет (18, 19 лет) и старше 55 лет — служба безопасности завода НЕ согласовывает, отказ!
-   - Если кандидату 18 или 19 лет, либо старше 55: «К сожалению, служба безопасности предприятий согласовывает кандидатов строго в возрасте от 20 до 55 лет. Будем рады видеть вас чуть позже!»
-   - КАНДИДАТЫ С АВИТО: уже предварительно отфильтрованы ассистентом по возрасту (20-55), полу и гражданству РФ. Не устраивай им повторный допрос, общайся сразу предметно по условиям их объекта и веди к получению фото паспорта и прописки.
-7. В конце ответа всегда мягко возвращай кандидата к следующему логическому действию."""
-
-
-def sanitize_text(text: str) -> str:
-    if not text:
-        return text
-    replacements = {
-        "общежитии": "квартире",
-        "общежитие": "квартира",
-        "общежития": "квартиры",
-        "общежитиях": "квартирах",
-        "общежитий": "квартир",
-        "хостел": "квартира",
-        "хостеле": "квартире",
-        "хостела": "квартиры",
-        "койко-место": "место в квартире",
-        "койко-места": "места в квартире",
-        "(не нары!)": "",
-        "не нары!": "",
-        "не нары": "",
-        "ровно 0 ₽ вычетов": "никаких вычетов",
-        "0 ₽ вычетов": "без вычетов",
-        "0 рублей вычетов": "без вычетов"
-    }
-    for old, new in replacements.items():
-        text = text.replace(old, new).replace(old.capitalize(), new.capitalize())
-        
-    # Жесткий предохранитель: никаких предложений замазать паспорт или поставить водяные знаки
-    blur_patterns = [
-        r'(?:вы\s+)?(?:можете\s+)?замазат[ь|е][^.!?,\n]*',
-        r'(?:вы\s+)?(?:можете\s+)?закрыт[ь|е]\s+(?:серию|номер)[^.!?,\n]*',
-        r'(?:поставить|наложить)\s+водяно[й|е]\s+знак[^.!?,\n]*',
-        r'водяной\s+знак[^.!?,\n]*'
-    ]
-    for bp in blur_patterns:
-        text = re.sub(bp, 'предоставить четкое фото разворота паспорта', text, flags=re.IGNORECASE)
-        
-    return text.strip()
-
-
-def call_gemini_llm(history, user_message, context_hint=""):
-    """Вызов Gemini 3.1 Flash Lite с отказоустойчивостью."""
-    contents = []
-    for item in history[-6:]:
-        role = "user" if item.get("role") == "user" else "model"
-        contents.append({"role": role, "parts": [{"text": item.get("text", "")}]})
-    
-    msg_with_hint = user_message
-    if context_hint:
-        msg_with_hint = f"[Контекст воронки: {context_hint}]\nВопрос кандидата: {user_message}"
-        
-    contents.append({"role": "user", "parts": [{"text": msg_with_hint}]})
-    
-    payload = {
-        "contents": contents,
-        "systemInstruction": {"parts": [{"text": SYSTEM_INSTRUCTION_RECRUITER}]},
-        "generationConfig": {"temperature": 0.6, "maxOutputTokens": 350}
-    }
-
-    for model_name in [PRIMARY_MODEL, BACKUP_MODEL]:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
-        for attempt in range(2):
-            try:
-                req = urllib.request.Request(
-                    url,
-                    data=json.dumps(payload).encode("utf-8"),
-                    headers={"Content-Type": "application/json"}
-                )
-                with urllib.request.urlopen(req, timeout=15, context=ctx) as resp:
-                    data = json.loads(resp.read().decode("utf-8"))
-                    candidates = data.get("candidates", [])
-                    if candidates:
-                        raw = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "").strip()
-                        if raw:
-                            return sanitize_text(raw)
-            except Exception as e:
-                print(f"[GEMINI LLM {model_name} attempt {attempt+1} ERR]: {e}", flush=True)
-                time.sleep(1)
-    return None
-
-
-def check_document_vision(img_url: str) -> dict:
-    """
-    Проверяет изображение через Gemini Vision:
-    Возвращает dict:
-    {
-       "is_passport": bool,
-       "doc_type": "main_page" | "registration_page" | "not_a_document",
-       "description": str
-    }
-    """
-    try:
-        req = urllib.request.Request(img_url, headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(req, context=ctx, timeout=15) as r:
-            img_b64 = base64.b64encode(r.read()).decode('utf-8')
-            
-        prompt = """Посмотри внимательно на изображение.
-Является ли это изображение:
-1) Главным разворотом паспорта (2-3 страница с фотографией, ФИО и кем выдан)
-2) Страницей паспорта со штампом регистрации / прописки
-3) Или это НЕ паспорт (комната, дверь, улица, случайный предмет, селфи без документа, пейзаж, чек и т.д.)?
-
-Ответь строго валидным JSON:
-{
-  "is_passport": true/false,
-  "doc_type": "main_page" | "registration_page" | "not_a_document",
-  "description": "краткое описание того что на фото на русском"
-}"""
-
-        payload = {
-            'contents': [{
-                'role': 'user',
-                'parts': [
-                    {'text': prompt},
-                    {'inlineData': {'mimeType': 'image/jpeg', 'data': img_b64}}
-                ]
-            }],
-            'generationConfig': {'responseMimeType': 'application/json', 'temperature': 0.1}
-        }
-        
-        for model_name in [PRIMARY_MODEL, BACKUP_MODEL]:
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
-            try:
-                req_g = urllib.request.Request(url, headers={'Content-Type': 'application/json'}, data=json.dumps(payload).encode('utf-8'))
-                with urllib.request.urlopen(req_g, context=ctx, timeout=25) as r2:
-                    data = json.loads(r2.read().decode('utf-8'))
-                    txt = data['candidates'][0]['content']['parts'][0]['text']
-                    parsed = json.loads(txt)
-                    return {
-                        "is_passport": bool(parsed.get("is_passport")),
-                        "doc_type": parsed.get("doc_type", "not_a_document"),
-                        "description": parsed.get("description", "")
-                    }
-            except Exception as e:
-                print(f"[GEMINI VISION {model_name} ERR]: {e}", flush=True)
-
-    except Exception as e:
-        print(f"[GEMINI VISION DOWNLOAD ERR]: {e}", flush=True)
-
-    # При полном сбое проверки не блокируем
-    return {"is_passport": True, "doc_type": "main_page", "description": "документ"}
-
-
-# --- DATABASE INITIALIZATION ---
+# -------------------------------------------------------------
+# ИНИЦИАЛИЗАЦИЯ БАЗЫ ДАННЫХ SQLITE (ПЕРСИСТЕНТНОСТЬ 100%)
+# -------------------------------------------------------------
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
@@ -319,8 +140,8 @@ def init_db():
         chat_id INTEGER PRIMARY KEY,
         user_id INTEGER,
         name TEXT,
-        scenario TEXT DEFAULT 'sms',
-        step TEXT DEFAULT 'AWAITING_OBJECT',
+        scenario TEXT DEFAULT 'organic',
+        step TEXT DEFAULT 'AWAITING_QUAL',
         selected_object TEXT DEFAULT 'abi',
         phone TEXT,
         has_main_page INTEGER DEFAULT 0,
@@ -332,6 +153,15 @@ def init_db():
     )
     """)
     cur.execute("""
+    CREATE TABLE IF NOT EXISTS bot_messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        chat_id INTEGER,
+        role TEXT,
+        text TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+    cur.execute("""
     CREATE TABLE IF NOT EXISTS bot_meta (
         key TEXT PRIMARY KEY,
         value TEXT
@@ -340,8 +170,32 @@ def init_db():
     conn.commit()
     conn.close()
 
-
 init_db()
+
+
+def save_chat_message(chat_id, role, text):
+    if not text:
+        return
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+        cur.execute("INSERT INTO bot_messages (chat_id, role, text) VALUES (?, ?, ?)", (chat_id, role, text))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"[DB SAVE MSG ERR]: {e}", flush=True)
+
+
+def get_chat_history(chat_id, limit=16):
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+        cur.execute("SELECT role, text FROM bot_messages WHERE chat_id = ? ORDER BY id DESC LIMIT ?", (chat_id, limit))
+        rows = cur.fetchall()
+        conn.close()
+        return [{"role": r[0], "text": r[1]} for r in reversed(rows)]
+    except Exception:
+        return []
 
 
 def get_meta(key: str, default=None):
@@ -367,61 +221,6 @@ def set_meta(key: str, value):
         print(f"[SET META ERR]: {e}", flush=True)
 
 
-def register_webhook(webhook_url: str):
-    """
-    Регистрирует Webhook в MAX Bot API ИСКЛЮЧИТЕЛЬНО после успешного Handshake-теста!
-    Если эндпоинт возвращает 404 (старый билд на облаке) или недоступен — регистрация отменяется,
-    чтобы исключить 'Черную дыру' (сгорание сообщений кандидатов).
-    """
-    try:
-        check_req = urllib.request.Request(
-            webhook_url,
-            data=b"{}",
-            headers={"Content-Type": "application/json", "User-Agent": "MAX-Webhook-Tester/1.0"}
-        )
-        with urllib.request.urlopen(check_req, timeout=5, context=ctx) as test_resp:
-            if test_resp.status != 200:
-                print(f"⚠️ [WEBHOOK HANDSHAKE REJECTED] {webhook_url} вернул HTTP {test_resp.status}. Отмена регистрации, остаемся на надежном Long Polling!", flush=True)
-                return None
-    except Exception as e_check:
-        print(f"⚠️ [WEBHOOK HANDSHAKE FAILED] {webhook_url} недоступен ({e_check}). Отмена регистрации, остаемся на надежном Long Polling!", flush=True)
-        return None
-
-    url = f"{MAX_API_BASE}/subscriptions"
-    payload = {"url": webhook_url}
-    req = urllib.request.Request(
-        url,
-        data=json.dumps(payload).encode('utf-8'),
-        headers={"Authorization": TOKEN, "Content-Type": "application/json"}
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=10, context=ctx) as r:
-            res = json.loads(r.read().decode('utf-8'))
-            print(f"🚀 [MAX WEBHOOK REGISTERED] {webhook_url}: {res}", flush=True)
-            return res
-    except Exception as e:
-        print(f"⚠️ [MAX WEBHOOK REGISTRATION ERR]: {e}", flush=True)
-        return None
-
-
-def delete_webhook(webhook_url: str):
-    import urllib.parse
-    url = f"{MAX_API_BASE}/subscriptions?url={urllib.parse.quote(webhook_url, safe='')}"
-    req = urllib.request.Request(
-        url,
-        headers={"Authorization": TOKEN},
-        method="DELETE"
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=10, context=ctx) as r:
-            res = json.loads(r.read().decode('utf-8'))
-            print(f"[MAX WEBHOOK DELETED] {webhook_url}: {res}", flush=True)
-            return res
-    except Exception as e:
-        print(f"[MAX WEBHOOK DELETE ERR]: {e}", flush=True)
-        return None
-
-
 def get_user_state(chat_id, user_id=None, name="Кандидат"):
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
@@ -430,11 +229,11 @@ def get_user_state(chat_id, user_id=None, name="Кандидат"):
     if not row:
         cur.execute("""
         INSERT INTO bot_users (chat_id, user_id, name, scenario, step, selected_object)
-        VALUES (?, ?, ?, 'sms', 'AWAITING_OBJECT', 'abi')
+        VALUES (?, ?, ?, 'organic', 'AWAITING_QUAL', 'abi')
         """, (chat_id, user_id, name))
         conn.commit()
         state = {
-            "scenario": "sms", "step": "AWAITING_OBJECT", "object": "abi",
+            "scenario": "organic", "step": "AWAITING_QUAL", "object": "abi",
             "phone": None, "has_main_page": 0, "has_reg_page": 0,
             "deal_id": None, "name": name, "last_mid": None
         }
@@ -465,8 +264,159 @@ def update_user_state(chat_id, **kwargs):
     conn.close()
 
 
+# -------------------------------------------------------------
+# САНИТАЙЗЕР ТЕКСТА (ЗАЩИТА ОТ ЗАПРЕЩЕННЫХ СЛОВ)
+# -------------------------------------------------------------
+def sanitize_text(text: str) -> str:
+    if not text:
+        return text
+    replacements = {
+        "общежитии": "квартире",
+        "общежитие": "квартира",
+        "общежития": "квартиры",
+        "общежитиях": "квартирах",
+        "общежитий": "квартир",
+        "хостел": "квартира",
+        "хостеле": "квартире",
+        "хостела": "квартиры",
+        "койко-место": "место в квартире",
+        "койко-места": "места в квартире",
+        "(не нары!)": "",
+        "не нары!": "",
+        "не нары": "",
+        "ровно 0 ₽ вычетов": "никаких вычетов",
+        "0 ₽ вычетов": "без вычетов",
+        "0 рублей вычетов": "без вычетов"
+    }
+    for old, new in replacements.items():
+        text = text.replace(old, new).replace(old.capitalize(), new.capitalize())
+
+    # Жесткий предохранитель: никаких предложений замазать паспорт
+    blur_patterns = [
+        r'(?:вы\s+)?(?:можете\s+)?замазат[ь|е][^.!?,\n]*',
+        r'(?:вы\s+)?(?:можете\s+)?закрыт[ь|е]\s+(?:серию|номер)[^.!?,\n]*',
+        r'(?:поставить|наложить)\s+водяно[й|е]\s+знак[^.!?,\n]*',
+        r'водяной\s+знак[^.!?,\n]*'
+    ]
+    for bp in blur_patterns:
+        text = re.sub(bp, 'предоставить четкое фото разворота паспорта', text, flags=re.IGNORECASE)
+
+    return text.strip()
+
+
+# -------------------------------------------------------------
+# GEMINI LLM ENGINE (ГЛАВНЫЙ ИНТЕЛЛЕКТУАЛЬНЫЙ МОЗГ)
+# -------------------------------------------------------------
+def call_gemini_llm(history, user_message, context_hint=""):
+    """
+    Прямой вызов Google Gemini 3.1 Flash Lite с полной хронологической историей.
+    Модель видит весь диалог и контекст задачи.
+    """
+    contents = []
+    # Загружаем хронологию диалога
+    for item in history:
+        role = "user" if item.get("role") == "user" else "model"
+        text = item.get("text", "").strip()
+        if text:
+            contents.append({"role": role, "parts": [{"text": text}]})
+
+    prompt_text = user_message
+    if context_hint:
+        prompt_text = f"[Служебный контекст: {context_hint}]\nСообщение кандидата: {user_message}"
+
+    contents.append({"role": "user", "parts": [{"text": prompt_text}]})
+
+    payload = {
+        "contents": contents,
+        "systemInstruction": {"parts": [{"text": SYSTEM_PROMPT_ENTERPRISE_RECRUITER}]},
+        "generationConfig": {"temperature": 0.65, "maxOutputTokens": 450}
+    }
+
+    for model_name in [PRIMARY_MODEL, BACKUP_MODEL]:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
+        for attempt in range(2):
+            try:
+                req = urllib.request.Request(
+                    url,
+                    data=json.dumps(payload).encode("utf-8"),
+                    headers={"Content-Type": "application/json"}
+                )
+                with urllib.request.urlopen(req, timeout=12, context=ctx) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
+                    candidates = data.get("candidates", [])
+                    if candidates:
+                        raw = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "").strip()
+                        if raw:
+                            return sanitize_text(raw)
+            except Exception as e:
+                print(f"[GEMINI LLM {model_name} ERR]: {e}", flush=True)
+                time.sleep(1)
+
+    return (
+        "Спасибо за сообщение! Служба безопасности наших режимных производств согласовывает кандидатов "
+        "строго от 20 до 55 лет с гражданством РФ. Подскажите, пожалуйста, сколько вам полных лет и напишите ваш номер телефона для связи!"
+    )
+
+
+# -------------------------------------------------------------
+# GEMINI VISION (ПРОВЕРКА ФОТО ДОКУМЕНТОВ)
+# -------------------------------------------------------------
+def check_document_vision(img_url: str) -> dict:
+    try:
+        req = urllib.request.Request(img_url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, context=ctx, timeout=15) as r:
+            img_b64 = base64.b64encode(r.read()).decode('utf-8')
+
+        prompt = """Посмотри внимательно на изображение.
+Является ли это изображение:
+1) Главным разворотом паспорта РФ (2-3 страница с фотографией, ФИО и кем выдан)
+2) Разворотом паспорта РФ со штампом регистрации / прописки
+3) Или это НЕ паспорт (комната, дверь, лицо без документа, посторонний предмет, чек и т.д.)?
+
+Ответь строго валидным JSON:
+{
+  "is_passport": true/false,
+  "doc_type": "main_page" | "registration_page" | "not_a_document",
+  "description": "краткое описание того что на фото на русском"
+}"""
+
+        payload = {
+            'contents': [{
+                'role': 'user',
+                'parts': [
+                    {'text': prompt},
+                    {'inlineData': {'mimeType': 'image/jpeg', 'data': img_b64}}
+                ]
+            }],
+            'generationConfig': {'responseMimeType': 'application/json', 'temperature': 0.1}
+        }
+
+        for model_name in [PRIMARY_MODEL, BACKUP_MODEL]:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
+            try:
+                req_g = urllib.request.Request(url, headers={'Content-Type': 'application/json'}, data=json.dumps(payload).encode('utf-8'))
+                with urllib.request.urlopen(req_g, context=ctx, timeout=20) as r2:
+                    data = json.loads(r2.read().decode('utf-8'))
+                    txt = data['candidates'][0]['content']['parts'][0]['text']
+                    parsed = json.loads(txt)
+                    return {
+                        "is_passport": bool(parsed.get("is_passport")),
+                        "doc_type": parsed.get("doc_type", "not_a_document"),
+                        "description": parsed.get("description", "")
+                    }
+            except Exception as e:
+                print(f"[GEMINI VISION {model_name} ERR]: {e}", flush=True)
+
+    except Exception as e:
+        print(f"[GEMINI VISION ERR]: {e}", flush=True)
+
+    return {"is_passport": True, "doc_type": "main_page", "description": "документ"}
+
+
+# -------------------------------------------------------------
+# МАКС API МЕССЕНДЖЕРА: ОТПРАВКА СООБЩЕНИЙ
+# -------------------------------------------------------------
 def send_message(chat_id, text, keyboard=None):
-    """Строгая отправка 1 сообщения кандидату в диалог."""
     if not chat_id or (isinstance(chat_id, int) and chat_id <= 0) or str(chat_id).startswith("-"):
         return None
 
@@ -477,7 +427,7 @@ def send_message(chat_id, text, keyboard=None):
             "type": "inline_keyboard",
             "payload": {"buttons": keyboard}
         }]
-    
+
     for attempt in range(3):
         req = urllib.request.Request(url, data=json.dumps(payload).encode('utf-8'), headers={
             "Authorization": TOKEN,
@@ -486,34 +436,12 @@ def send_message(chat_id, text, keyboard=None):
         try:
             with urllib.request.urlopen(req, timeout=10, context=ctx) as r:
                 res = json.loads(r.read().decode('utf-8'))
-                print(f"📤 [MAX SENT] Chat {chat_id}: '{text[:100]}...' [mid: {res.get('message', {}).get('body', {}).get('mid')}]", flush=True)
+                print(f"📤 [MAX SENT] Chat {chat_id}: '{text[:90]}...' [mid: {res.get('message', {}).get('body', {}).get('mid')}]", flush=True)
                 return res
         except Exception as e:
-            print(f"[MAX SEND ERR attempt {attempt+1}] {e}", flush=True)
+            print(f"[MAX SEND ERR attempt {attempt+1}]: {e}", flush=True)
             time.sleep(1)
     return None
-
-
-def answer_callback(cb_id, notification="Выбор принят"):
-    url = f"{MAX_API_BASE}/answers?callback_id={cb_id}"
-    payload = {"notification": notification}
-    try:
-        req = urllib.request.Request(url, data=json.dumps(payload).encode('utf-8'), headers={
-            "Authorization": TOKEN,
-            "Content-Type": "application/json"
-        })
-        with urllib.request.urlopen(req, timeout=5, context=ctx) as r:
-            return json.loads(r.read().decode('utf-8'))
-    except Exception:
-        try:
-            req_empty = urllib.request.Request(url, data=json.dumps({}).encode('utf-8'), headers={
-                "Authorization": TOKEN,
-                "Content-Type": "application/json"
-            })
-            with urllib.request.urlopen(req_empty, timeout=5, context=ctx) as r2:
-                return json.loads(r2.read().decode('utf-8'))
-        except Exception:
-            return None
 
 
 def extract_phone(text):
@@ -529,9 +457,8 @@ def extract_phone(text):
     return None
 
 
-def create_b24_deal(name, phone, object_key):
+def create_b24_deal(name, phone, object_title="АБИ"):
     global current_girl_idx
-    obj = OBJECTS_DATA.get(object_key, OBJECTS_DATA["abi"])
     manager_id = GIRLS_QUEUE[current_girl_idx % len(GIRLS_QUEUE)]
     current_girl_idx += 1
 
@@ -550,435 +477,202 @@ def create_b24_deal(name, phone, object_key):
         d_url = f"{B24_WEBHOOK}crm.deal.add.json"
         d_payload = {
             "fields": {
-                "TITLE": f"{name} - MAX Бот: {obj['title']}",
+                "TITLE": f"{name} - MAX Бот: {object_title}",
                 "CATEGORY_ID": 0,
                 "STAGE_ID": "NEW",
                 "CONTACT_ID": cid,
                 "ASSIGNED_BY_ID": manager_id,
-                "UF_CRM_1775470003043": obj["code"],
                 "SOURCE_ID": "OTHER",
-                "SOURCE_DESCRIPTION": f"Официальный МАКС Бот (@id9729371578_bot) | Выбран объект: {obj['title']}"
+                "SOURCE_DESCRIPTION": f"Официальный МАКС Бот (@id9729371578_bot) | Интерес: {object_title}"
             }
         }
         req2 = urllib.request.Request(d_url, data=json.dumps(d_payload).encode('utf-8'), headers={"Content-Type": "application/json"})
         with urllib.request.urlopen(req2, timeout=10, context=ctx) as r2:
             did = json.loads(r2.read().decode('utf-8'))['result']
-        print(f"[B24 DEAL CREATED] #{did} for {name} ({phone}), Object: {obj['title']}, Assigned: {manager_id}", flush=True)
+        print(f"⭐ [B24 СДЕЛКА СОЗДАНА] #{did} для {name} ({phone}), Назначена: {manager_id}", flush=True)
         return did
     except Exception as e:
         print(f"[B24 CREATE ERR]: {e}", flush=True)
         return None
 
 
-# Реестр диалогов для контекста LLM
-CHAT_HISTORIES = {}
-
-
+# -------------------------------------------------------------
+# ЕДИНЫЙ ОБРАБОТЧИК СООБЩЕНИЙ (LLM-FIRST ARCHITECTURE)
+# -------------------------------------------------------------
 def handle_single_update(up: dict):
-    """
-    Единая точка обработки любого события от MAX API.
-    Вызывается синхронно при входящем Webhook-запросе или из цикла long polling.
-    """
     if not isinstance(up, dict):
         return
 
     u_type = up.get("update_type")
 
     # =========================================================
-    # 1. ОБРАБОТКА ИНЛАЙН-КНОПКИ ВЫБОРА ОБЪЕКТА
+    # 1. ОБРАБОТКА ВХОДЯЩЕГО СООБЩЕНИЯ ИЛИ ФОТО
     # =========================================================
-    if u_type == "message_callback":
-        cb = up.get("callback", {})
-        cb_id = cb.get("callback_id")
-        payload = cb.get("payload", "")
-        sender = up.get("sender") or cb.get("user") or {}
-        user_id = sender.get("user_id")
-        rec = up.get("message", {}).get("recipient", {})
-        chat_type = rec.get("chat_type")
-        chat_id = rec.get("chat_id") or user_id
-        name = sender.get("name") or sender.get("first_name") or "Кандидат"
-        
-        if chat_type and chat_type != "dialog":
-            return
-        if (isinstance(chat_id, int) and chat_id <= 0) or str(chat_id).startswith("-"):
-            return
-        
-        if payload in OBJECTS_DATA and chat_id:
-            obj = OBJECTS_DATA[payload]
-            if cb_id:
-                answer_callback(cb_id, f"Выбран: {obj['title']}")
-                
-            update_user_state(
-                chat_id,
-                scenario="sms",
-                step="AWAITING_PHONE",
-                object=payload,
-                name=name
-            )
-            
-            # ЕДИНОЕ емкое сообщение без дублирования
-            msg = (
-                f"Отличный выбор! {obj['excerpt']}\n\n"
-                "────────────────────────\n"
-                "⚠️ На ближайший заезд осталось всего 3 свободных места!\n"
-                "📞 Напишите ваш номер телефона — менеджер сразу закрепит за вами бронь места:"
-            )
-            send_message(chat_id, msg)
-            return
-
-    # =========================================================
-    # 2. ВХОДЯЩЕЕ СООБЩЕНИЕ / ФОТО / СТАРТ
-    # =========================================================
-    elif u_type in ["message_created", "bot_started"]:
+    if u_type in ["message_created", "bot_started"]:
         msg = up.get("message", {})
         sender = msg.get("sender") or up.get("user") or {}
         if sender.get("is_bot"):
             return
-            
+
         user_id = sender.get("user_id")
         rec = msg.get("recipient", {})
         chat_type = rec.get("chat_type")
         chat_id = rec.get("chat_id") or up.get("chat_id") or user_id
         name = sender.get("name") or f"{sender.get('first_name', '')} {sender.get('last_name', '')}".strip() or "Кандидат"
-        
+
         if chat_type and chat_type != "dialog":
             return
         if not chat_id or (isinstance(chat_id, int) and chat_id <= 0) or str(chat_id).startswith("-"):
             return
-            
+
         body = msg.get("body", {})
         mid = body.get("mid")
         text = (body.get("text") or "").strip()
         attachments = body.get("attachments", [])
-        start_payload = up.get("payload") or ""
-        
+
         st = get_user_state(chat_id, user_id=user_id, name=name)
-        
-        # Защита от дублей одного и того же mid
+
+        # Защита от дублей одного и того же сообщения
         if mid and st.get("last_mid") == mid:
             return
         if mid:
             update_user_state(chat_id, last_mid=mid)
-            
-        # Сохраняем в историю чата для LLM
-        hist = CHAT_HISTORIES.setdefault(chat_id, [])
-        if text:
-            print(f"📩 [MAX INCOMING] From: {name} (Chat {chat_id}): '{text}'", flush=True)
-            hist.append({"role": "user", "text": text})
 
-        # Определение прикрепленного фото
+        # Сохраняем сообщение соискателя в хронологическую историю диалога
+        if text:
+            print(f"📩 [MAX INCOMING] From {name} (Chat {chat_id}): '{text}'", flush=True)
+            save_chat_message(chat_id, "user", text)
+
+        # -------------------------------------------------------------
+        # А. ОБРАБОТКА ФОТО ДОКУМЕНТОВ (GEMINI VISION)
+        # -------------------------------------------------------------
         has_photo = any(att.get("type") in ["image", "photo", "file"] for att in attachments)
-        photo_url = None
         if has_photo:
             photo_att = next((att for att in attachments if att.get("type") in ["image", "photo", "file"]), None)
             photo_url = photo_att.get("payload", {}).get("url") if photo_att else None
 
-        # Проверка на телефон в тексте
+            if photo_url:
+                print(f"[GEMINI VISION] Проверка фото для чата {chat_id}...", flush=True)
+                doc_check = check_document_vision(photo_url)
+                print(f"[GEMINI VISION РЕЗУЛЬТАТ]: {doc_check}", flush=True)
+
+                is_pass = doc_check.get("is_passport")
+                dtype = doc_check.get("doc_type")
+                desc = doc_check.get("description", "снимок")
+
+                if not is_pass or dtype == "not_a_document":
+                    reply = (
+                        f"Спасибо за снимок! Но на фото не видно паспорта (кажется, это {desc}).\n\n"
+                        "Для согласования службой безопасности завода и пропуска на КПП требуются официальные документы:\n"
+                        "1️⃣ Главный разворот паспорта (2–3 страница с фотографией)\n"
+                        "2️⃣ Разворот со штампом прописки (регистрации)\n\n"
+                        "Пожалуйста, сфотографируйте разворот паспорта!"
+                    )
+                    send_message(chat_id, reply)
+                    save_chat_message(chat_id, "model", reply)
+                    return
+
+                elif dtype == "main_page":
+                    update_user_state(chat_id, has_main_page=1)
+                    st["has_main_page"] = 1
+                    if not st.get("has_reg_page"):
+                        reply = (
+                            "Главный разворот паспорта принят! 👍\n\n"
+                            "Теперь пришлите, пожалуйста, второе фото — разворот с действующей пропиской (штамп регистрации), "
+                            "чтобы служба безопасности завершила оформление пропуска."
+                        )
+                    else:
+                        reply = (
+                            "Отлично, все необходимые документы получены! Передала их в службу безопасности на оформление пропуска.\n\n"
+                            "В течение 15–30 минут координатор свяжется с вами по телефону для подтверждения деталей заезда!"
+                        )
+                    send_message(chat_id, reply)
+                    save_chat_message(chat_id, "model", reply)
+                    return
+
+                elif dtype == "registration_page":
+                    update_user_state(chat_id, has_reg_page=1)
+                    st["has_reg_page"] = 1
+                    if not st.get("has_main_page"):
+                        reply = (
+                            "Страница со штампом прописки принята! 👍\n\n"
+                            "Теперь пришлите, пожалуйста, фото главного разворота паспорта (2–3 страница с вашей фотографией)."
+                        )
+                    else:
+                        reply = (
+                            "Отлично, все необходимые документы получены! Передала их в службу безопасности на оформление пропуска.\n\n"
+                            "В течение 15–30 минут координатор свяжется с вами по телефону для подтверждения деталей заезда!"
+                        )
+                    send_message(chat_id, reply)
+                    save_chat_message(chat_id, "model", reply)
+                    return
+
+        # -------------------------------------------------------------
+        # Б. ФОНОВОЕ СОХРАНЕНИЕ НОМЕРА ТЕЛЕФОНА В БИТРИКС24
+        # -------------------------------------------------------------
         phone = extract_phone(text)
+        if phone and not st.get("phone"):
+            did = create_b24_deal(name, phone, st.get("object", "АБИ"))
+            update_user_state(chat_id, phone=phone, deal_id=did)
 
         # -------------------------------------------------------------
-        # 1. ОБРАБОТКА ФОТО ДОКУМЕНТОВ ЧЕРЕЗ GEMINI VISION
+        # В. ПРЯМОЙ ОТВЕТ НЕЙРОСЕТИ (GEMINI LLM) НА ЛЮБОЙ ВОПРОС
         # -------------------------------------------------------------
-        if has_photo and photo_url:
-            print(f"[GEMINI VISION] Проверяем входящее фото для чата {chat_id}...", flush=True)
-            doc_check = check_document_vision(photo_url)
-            print(f"[GEMINI VISION РЕЗУЛЬТАТ]: {doc_check}", flush=True)
+        # Загружаем полную хронологическую историю переписки
+        full_history = get_chat_history(chat_id, limit=16)
 
-            is_pass = doc_check.get("is_passport")
-            dtype = doc_check.get("doc_type")
-            desc = doc_check.get("description", "изображение")
-
-            # А. Если это НЕ паспорт (дверь, улица, интерьер, случайное фото)
-            if not is_pass or dtype == "not_a_document":
-                reply = (
-                    f"Спасибо за снимок! Но на фото не видно паспорта (кажется, это {desc}).\n\n"
-                    "Для службы безопасности режимного завода и оформления пропуска на КПП нам требуются именно официальные документы:\n"
-                    "1️⃣ Главный разворот паспорта (2–3 страница с вашей фотографией)\n"
-                    "2️⃣ Разворот с действующей пропиской (штамп регистрации)\n\n"
-                    "Пожалуйста, сфотографируйте и пришлите разворот паспорта!"
-                )
-                send_message(chat_id, reply)
-                hist.append({"role": "model", "text": reply})
-                return
-
-            # Б. Это главный разворот паспорта (2-3 стр)
-            elif dtype == "main_page":
-                update_user_state(chat_id, has_main_page=1)
-                st["has_main_page"] = 1
-                
-                if not st.get("has_reg_page"):
-                    reply = (
-                        "Главный разворот паспорта принят! 👍\n\n"
-                        "Теперь пришлите, пожалуйста, второе фото — разворот с действующей пропиской (штамп регистрации), "
-                        "чтобы служба безопасности завершила оформление пропуска."
-                    )
-                    send_message(chat_id, reply)
-                    hist.append({"role": "model", "text": reply})
-                    return
-                else:
-                    reply = (
-                        "Отлично, все необходимые документы получены! Передал их в службу безопасности на оформление пропуска.\n\n"
-                        "В течение 15–30 минут менеджер свяжется с вами по телефону для подтверждения деталей заезда!"
-                    )
-                    update_user_state(chat_id, step="COMPLETED")
-                    send_message(chat_id, reply)
-                    hist.append({"role": "model", "text": reply})
-                    return
-
-            # В. Это страница прописки / регистрации
-            elif dtype == "registration_page":
-                update_user_state(chat_id, has_reg_page=1)
-                st["has_reg_page"] = 1
-
-                if not st.get("has_main_page"):
-                    reply = (
-                        "Страница со штампом прописки принята! 👍\n\n"
-                        "Теперь пришлите, пожалуйста, фото главного разворота паспорта (2–3 страница с вашей фотографией)."
-                    )
-                    send_message(chat_id, reply)
-                    hist.append({"role": "model", "text": reply})
-                    return
-                else:
-                    reply = (
-                        "Отлично, все необходимые документы получены! Передал их в службу безопасности на оформление пропуска.\n\n"
-                        "В течение 15–30 минут менеджер свяжется с вами по телефону для подтверждения деталей заезда!"
-                    )
-                    update_user_state(chat_id, step="COMPLETED")
-                    send_message(chat_id, reply)
-                    hist.append({"role": "model", "text": reply})
-                    return
-            else:
-                reply = (
-                    "Фото получено! Проверьте, пожалуйста, чтобы было четко видно главный разворот паспорта с фото "
-                    "и страницу с пропиской для согласования службой безопасности завода."
-                )
-                send_message(chat_id, reply)
-                return
-
-        # -------------------------------------------------------------
-        # 2. ЕСЛИ СОИСКАТЕЛЬ ПРИСЛАЛ НОМЕР ТЕЛЕФОНА
-        # -------------------------------------------------------------
+        context_hint = f"Имя кандидата: {name}."
         if phone:
-            obj_k = st.get("object", "abi")
-            obj_info = OBJECTS_DATA.get(obj_k, OBJECTS_DATA["abi"])
-            did = create_b24_deal(name, phone, obj_k)
-            
-            update_user_state(
-                chat_id,
-                phone=phone,
-                deal_id=did,
-                step="AWAITING_DOCS"
-            )
-            
-            reply = (
-                f"Спасибо! Номер {phone} принят, место на объекте «{obj_info['title']}» забронировано за вами! 👍\n\n"
-                "Чтобы служба безопасности завода выписала электронный пропуск на КПП и координатор подготовил заселение в комфортную квартиру, "
-                "отправьте, пожалуйста, два четких фото:\n"
-                "1️⃣ Главный разворот паспорта (2–3 страница с вашей фотографией)\n"
-                "2️⃣ Разворот со штампом прописки (регистрации)\n\n"
-                "Жду фото документов!"
-            )
-            send_message(chat_id, reply)
-            hist.append({"role": "model", "text": reply})
-            return
+            context_hint += f" Телефон зафиксирован: {phone}."
+        if st.get("deal_id"):
+            context_hint += f" Сделка в CRM #{st.get('deal_id')}."
 
-        # -------------------------------------------------------------
-        # 3. ВЫБОР ОБЪЕКТА ЦИФРОЙ ИЛИ НАЗВАНИЕМ (1, 2, 3, 4)
-        # -------------------------------------------------------------
-        num_map = {"1": "abi", "2": "tepofol", "3": "alfa", "4": "smart"}
-        matched_key = None
-        for num, k in num_map.items():
-            if text == num or text.startswith(num + ".") or text.startswith(num + ")"):
-                matched_key = k
-                break
-        if not matched_key:
-            t_low = text.lower()
-            if "аби" in t_low or "владимир" in t_low: matched_key = "abi"
-            elif "тепофол" in t_low or "кашир" in t_low: matched_key = "tepofol"
-            elif "альфа" in t_low or "техформ" in t_low or "подольск" in t_low or "климовск" in t_low: matched_key = "alfa"
-            elif "смарт" in t_low or "балаших" in t_low: matched_key = "smart"
+        # Нейросеть сама анализирует весь контекст, исправления, вопросы про брата, бонусы, возраст
+        ai_reply = call_gemini_llm(full_history[:-1], text, context_hint=context_hint)
 
-        if matched_key:
-            obj = OBJECTS_DATA[matched_key]
-            update_user_state(
-                chat_id,
-                scenario="sms",
-                step="AWAITING_PHONE",
-                object=matched_key,
-                name=name
-            )
-            msg = (
-                f"Отличный выбор! {obj['excerpt']}\n\n"
-                "────────────────────────\n"
-                "⚠️ На ближайший заезд осталось всего 3 свободных места!\n"
-                "📞 Напишите ваш номер телефона — менеджер сразу закрепит за вами бронь места:"
-            )
-            send_message(chat_id, msg)
-            hist.append({"role": "model", "text": msg})
-            return
-
-        # -------------------------------------------------------------
-        # 4. ОБНАРУЖЕНИЕ СТАРТА / АВИТО / РАССЫЛКИ
-        # -------------------------------------------------------------
-        full_payload = (start_payload or "").strip()
-        if text.startswith("/start "):
-            full_payload = text.replace("/start ", "").strip()
-        elif text.startswith("/start"):
-            full_payload = text.replace("/start", "").strip()
-
-        # Проверяем, пришел ли кандидат с Авито по конкретной вакансии (например: abi_95420 или tepofol_95421)
-        matched_avito_obj = None
-        avito_deal_id = None
-        for k in ["abi", "tepofol", "alfa", "smart"]:
-            if k in full_payload.lower():
-                matched_avito_obj = k
-                m_d = re.search(r'\d+', full_payload)
-                if m_d:
-                    avito_deal_id = int(m_d.group(0))
-                break
-
-        if matched_avito_obj:
-            obj_avito = OBJECTS_DATA[matched_avito_obj]
-            update_user_state(
-                chat_id,
-                scenario="avito",
-                step="AWAITING_DOCS_OR_PHONE",
-                object=matched_avito_obj,
-                deal_id=avito_deal_id,
-                name=name
-            )
-            greeting_avito = (
-                f"Здравствуйте, {name}! Рады вашему отклику на вакансию «{obj_avito['title']}» на Авито. 👍\n\n"
-                f"{obj_avito['excerpt']}\n\n"
-                "────────────────────────\n"
-                "Для согласования службой безопасности завода и бронирования бесплатной квартиры, "
-                "отправьте, пожалуйста, два четких фото:\n"
-                "1️⃣ Главный разворот паспорта (2–3 страница с вашей фотографией)\n"
-                "2️⃣ Разворот со штампом прописки (регистрации)\n\n"
-                "И напишите ваш номер телефона для связи!"
-            )
-            send_message(chat_id, greeting_avito)
-            hist.append({"role": "model", "text": greeting_avito})
-            return
-
-        is_start_cmd = text.lower() in ["/start", "старт", "начать", "меню", "привет", "здравствуйте", "добрый день", "добрый вечер"] or "/start" in text.lower() or "sms" in start_payload.lower() or "utm" in text.lower()
-
-        if is_start_cmd and st.get("step") == "AWAITING_OBJECT":
-            send_message(chat_id, WELCOME_TEXT, KEYBOARD)
-            hist.append({"role": "model", "text": WELCOME_TEXT})
-            return
-
-        # -------------------------------------------------------------
-                # Жесткий перехватчик по возрасту 18-19 лет (до вызова LLM)
-        t_low = text.lower()
-        if any(w in t_low for w in ["18", "19", "восемнадцат", "девятнадцат"]) and any(w in t_low for w in ["берете", "лет", "возраст", "возьмете", "примете", "со скольк", "возьм", "точно"]):
-            age_rej = (
-                "Служба безопасности наших предприятий согласовывает кандидатов строго в возрасте от 20 до 55 лет. "
-                "К сожалению, для сотрудников младше 20 лет (в том числе 18–19 лет) доступ на объекты закрыт, поэтому мы не сможем оформить пропуск.\n\n"
-                "Будем искренне рады видеть вас в нашей команде, как только вам исполнится 20 лет!"
-            )
-            send_message(chat_id, age_rej)
-            hist.append({"role": "model", "text": age_rej})
-            return
-
-        # 5. НЕТИПИЧНЫЕ ВОПРОСЫ / ВОЗРАЖЕНИЯ -> GEMINI LLM
-        # -------------------------------------------------------------
-        # Если кандидат пишет любой нестандартный текст («а если долги?», «я боюсь», «сколько вычетов?»)
-        # Подключаем живой LLM, который отвечает на вопрос и возвращает к активному шагу!
-        active_step = st.get("step", "AWAITING_OBJECT")
-        cur_obj = OBJECTS_DATA.get(st.get("object", "abi"), OBJECTS_DATA["abi"])
-        
-        hint = f"Кандидат находится на шаге {active_step}. Выбранный объект: {cur_obj['title']}."
-        if active_step == "AWAITING_PHONE":
-            hint += " После ответа на вопрос кандидата мягко попроси его написать номер телефона для брони места."
-        elif active_step == "AWAITING_DOCS":
-            hint += " После ответа на вопрос мягко напомни прислать фото паспорта (главный разворот и прописку)."
-        elif active_step == "AWAITING_OBJECT":
-            hint += " После ответа предложи выбрать один из 4 объектов (Владимир, Кашира, Подольск, Балашиха)."
-
-        ai_reply = call_gemini_llm(hist, text, context_hint=hint)
-        if ai_reply:
-            send_message(chat_id, ai_reply)
-            hist.append({"role": "model", "text": ai_reply})
-            return
-
-        # Fallback напоминание по шагам воронки
-        if active_step == "AWAITING_PHONE":
-            rem = (
-                f"Чтобы координатор ответил на все ваши вопросы по объекту «{cur_obj['title']}» "
-                "и закрепил за вами место — напишите, пожалуйста, ваш номер телефона для связи."
-            )
-            send_message(chat_id, rem)
-        elif active_step == "AWAITING_DOCS":
-            rem = "Подскажите, получилось сделать фото разворота паспорта и страницы с пропиской?"
-            send_message(chat_id, rem)
-        else:
-            send_message(chat_id, WELCOME_TEXT, KEYBOARD)
+        send_message(chat_id, ai_reply)
+        save_chat_message(chat_id, "model", ai_reply)
+        return
 
 
+# -------------------------------------------------------------
+# БОЕВОЙ ФОНОВЫЙ ЦИКЛ ОПРОСА С ХРАНЕНИЕМ МАРКЕРА В SQLITE
+# -------------------------------------------------------------
 def bot_worker_loop():
-    """Фоновый цикл Long Polling как надежный резерв (с сохранением маркера в SQLite)."""
-    init_db()
-    print("=== MAX BOT UNIFIED ENTERPRISE ENGINE STARTED ===", flush=True)
+    print("=== MAX BOT ENTERPRISE LLM-NATIVE ENGINE ONLINE ===", flush=True)
     marker_str = get_meta("last_marker")
     marker = int(marker_str) if marker_str and marker_str.isdigit() else None
     if marker:
-        print(f"[MAX BOT POLLER] Восстановлен сохраненный маркер из БД: {marker}", flush=True)
-    
+        print(f"[MAX BOT ENGINE] Восстановлен маркер из SQLite: {marker}", flush=True)
+
     while True:
         try:
             url = f"{MAX_API_BASE}/updates?timeout=3"
             if marker:
                 url += f"&marker={marker}"
-                
+
             req = urllib.request.Request(url, headers={"Authorization": TOKEN})
             with urllib.request.urlopen(req, timeout=35, context=ctx) as r:
                 data = json.loads(r.read().decode('utf-8'))
-                
+
             new_marker = data.get("marker")
             if new_marker:
                 marker = new_marker
                 set_meta("last_marker", marker)
-                
+
             updates = data.get("updates", [])
             for up in updates:
                 try:
                     handle_single_update(up)
                 except Exception as e_up:
-                    print(f"[MAX BOT UPDATE ERR]: {e_up}", flush=True)
+                    print(f"[MAX UPDATE ERROR]: {e_up}", flush=True)
 
         except urllib.error.URLError:
-            pass # Timeout on long polling is normal
+            pass  # Нормальный тайм-аут длинного опроса
         except Exception as e:
-            print(f"[BOT WORKER EXCEPTION]: {e}", flush=True)
+            print(f"[MAX WORKER EXCEPTION]: {e}", flush=True)
             time.sleep(2)
 
 
-# --- NATIVE HTTP SERVER FOR RENDER HEALTHCHECK ---
-class HealthHandler(http.server.BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.end_headers()
-        res = {"status": "ok", "service": "max-unified-recruiter", "model": PRIMARY_MODEL}
-        self.wfile.write(json.dumps(res).encode('utf-8'))
-
-    def log_message(self, format, *args):
-        pass # Silence access logs for Render healthchecks
-
-
-def run_server():
-    port = int(os.environ.get("PORT", 8080))
-    server = http.server.HTTPServer(("0.0.0.0", port), HealthHandler)
-    print(f"Healthcheck server running on port {port}...", flush=True)
-    server.serve_forever()
-
-
 if __name__ == "__main__":
-    enable_server = os.environ.get("ENABLE_HEALTH_SERVER", "0") == "1"
-    if enable_server:
-        t = threading.Thread(target=bot_worker_loop, daemon=True)
-        t.start()
-        run_server()
-    else:
-        bot_worker_loop()
+    bot_worker_loop()
