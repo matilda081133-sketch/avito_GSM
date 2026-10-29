@@ -114,7 +114,7 @@ def generate_llm_reply(
     learned_rules_text = get_learned_rules_for_prompt()
     full_system_prompt = f"{SYSTEM_PROMPT}\n{learned_rules_text}"
 
-    models_to_try = ["gemini-3.1-flash-lite", "gemini-3.1-flash-lite-preview", "gemini-3-flash-preview"]
+    models_to_try = ["gemini-3.1-flash-lite", "gemini-3.1-flash-lite-preview", "gemini-2.5-flash", "gemini-3.5-flash-lite"]
     for m in models_to_try:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent?key={api_key}"
         gen_cfg = {

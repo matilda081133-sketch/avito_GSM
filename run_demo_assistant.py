@@ -1155,10 +1155,9 @@ def process_valeria_chat(chat_id: str, cand_name: str, item_title: str, msgs: li
     return True
 
 def check_and_reply_valeria():
-    init_cabinet_filter()
     try:
-        unread = client.get_unread_chats(limit=30)
-        recent = client.get_recent_chats(limit=20)
+        unread = client.get_unread_chats(limit=50)
+        recent = client.get_recent_chats(limit=30)
         
         candidates = unread + recent
         seen = set()
@@ -1170,6 +1169,11 @@ def check_and_reply_valeria():
                 continue
             seen.add(cid)
             
+            # Если последнее сообщение отправлено нами — мы уже ответили, пропускаем
+            last_msg_meta = c.get('last_message', {})
+            if last_msg_meta.get('author_id') == AVITO_USER_ID:
+                continue
+
             users = c.get('users', [])
             cand_name = ""
             for u in users:
@@ -1179,29 +1183,15 @@ def check_and_reply_valeria():
             
             is_test_chat = (TARGET_CHAT_ID and cid == TARGET_CHAT_ID) or any(p in cand_name.lower() for p in ALLOWED_CANDIDATE_NAMES)
 
-            if not is_test_chat:
-                if not CABINET_MODE:
-                    continue
-                # СТРОГАЯ ФИЛЬТРАЦИЯ: ТОЛЬКО НОВЫЕ ЧАТЫ
-                chat_created = c.get('created', 0)
-                is_known_new = cid in active_new_chats
-                is_freshly_created = (chat_created >= BOT_START_TIME) and (cid not in initial_existing_chats)
+            if not is_test_chat and not CABINET_MODE:
+                continue
 
-                if not (is_known_new or is_freshly_created):
-                    # Старый чат, созданный до запуска бота — полностью игнорируем!
-                    continue
-
-                if is_freshly_created and cid not in active_new_chats:
-                    active_new_chats.add(cid)
-                    save_active_new_chats(active_new_chats)
-                    print(f"\n✨ [НОВЫЙ ЧАТ] Поступил новый отклик: {cand_name} (чат {cid}, создан: {chat_created})", flush=True)
-                
             item_ctx = c.get('context', {}).get('value', {})
             item_title = item_ctx.get('title', '')
             item_id = str(item_ctx.get('id', ''))
             item_url = item_ctx.get('url', '')
             
-            raw_msgs = client.get_chat_messages(cid, limit=50)
+            raw_msgs = client.get_chat_messages(cid, limit=25)
             if not raw_msgs:
                 continue
                 
