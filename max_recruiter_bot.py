@@ -464,12 +464,21 @@ def handle_direct_dialog(user_id: int, text, attachments: list, state: dict):
     text_lower = text_clean.lower()
 
     # 0. Разбор параметров deeplink (/start tag_dealid или /start tag)
-    start_match = re.search(r'(?:/start|start=|start\s+)\s*([a-zA-Z0-9_]+)', text_clean, re.IGNORECASE)
+    start_match = re.search(r'(?:/start|\bstart=|\butm_source=|\bstart\s+)\s*([a-zA-Z0-9_]+)', text_clean, re.IGNORECASE)
     if start_match:
         param = start_match.group(1).lower()
         parts = param.split('_')
         tag = parts[0]
         linked_deal_id = parts[1] if len(parts) > 1 and parts[1].isdigit() else None
+
+        # Обработка перехода с СМС-рассылки (UTM-метка ?start=sms)
+        if tag == "sms" or param.startswith("sms"):
+            session["source"] = "MAX_BROADCAST"
+            session["utm_source"] = "sms"
+            session["step"] = "AWAITING_CHOICE_AND_PHONE"
+            save_state(state)
+            send_max_message(user_id=user_id, text=MENU_TEXT)
+            return
         
         TAG_TO_FACILITY = {
             "abi": ("АБИ Владимир", "120"),

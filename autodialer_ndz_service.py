@@ -216,14 +216,37 @@ def check_recent_call_results(state):
             
             # Сценарий 1: Недозвон (длительность = 0 сек или код сброса)
             if dur == 0 or failed_code in ["304", "603", "486", "487", "404", "503"]:
+                # Требование: вызов должен длиться не менее 30 секунд, чтобы засчитать недозвон!
+                # Проверяем длительность дозвона/гудков через связанную активность Битрикс24
+                activity_id = c.get("CRM_ACTIVITY_ID")
+                ring_duration = 0
+                if activity_id:
+                    act_res = call_b24("crm.activity.get", {"id": activity_id}).get("result", {})
+                    created_str = act_res.get("CREATED")
+                    updated_str = act_res.get("LAST_UPDATED")
+                    if created_str and updated_str:
+                        try:
+                            t_start = datetime.fromisoformat(created_str)
+                            t_end = datetime.fromisoformat(updated_str)
+                            ring_duration = int((t_end - t_start).total_seconds())
+                        except Exception:
+                            pass
+
+                # Если дозвон шел меньше 30 секунд — недозвон НЕ ставится (быстрый сброс / ошибка)
+                if ring_duration > 0 and ring_duration < 30:
+                    print(f"⏳ [НЕДОЗВОН ОТКЛОНЕН] Сделка #{did} ({recruiter_name}) — гудки длились {ring_duration} сек (< 30 сек). Недозвон не засчитывается!", flush=True)
+                    add_timeline_comment(did, f"⏳ Робот автодозвона: Звонок длился {ring_duration} сек (< 30 сек).\nПо правилам недозвон засчитывается только при вызове от 30 секунд. Стадия сохранена.")
+                    processed_ids.add(cid)
+                    continue
+
                 if current_stage == "EXECUTING":
                     # Перевод в НДЗ 2
                     call_b24("crm.deal.update", {
                         "id": did,
                         "fields": {"STAGE_ID": "UC_NDZ2"}
                     })
-                    add_timeline_comment(did, f"🤖 Робот автодозвона: Зафиксирован недозвон (0 сек, код {failed_code}).\nСделка автоматически переведена: НДЗ 1 ➔ НДЗ 2.")
-                    print(f"⏩ [НЕДОЗВОН 1 -> НДЗ 2] Сделка #{did} ({recruiter_name}) переведена в UC_NDZ2", flush=True)
+                    add_timeline_comment(did, f"🤖 Робот автодозвона: Зафиксирован подтвержденный недозвон ({ring_duration or '30+'} сек гудков, код {failed_code}).\nСделка автоматически переведена: НДЗ 1 ➔ НДЗ 2.")
+                    print(f"⏩ [НЕДОЗВОН 1 -> НДЗ 2] Сделка #{did} ({recruiter_name}) переведена в UC_NDZ2 (гудки {ring_duration}с)", flush=True)
 
                 elif current_stage == "UC_NDZ2":
                     # Перевод в НДЗ 3
@@ -231,12 +254,12 @@ def check_recent_call_results(state):
                         "id": did,
                         "fields": {"STAGE_ID": "UC_NDZ3"}
                     })
-                    add_timeline_comment(did, f"🤖 Робот автодозвона: Зафиксирован повторный недозвон (0 сек, код {failed_code}).\nСделка автоматически переведена: НДЗ 2 ➔ НДЗ 3.")
-                    print(f"⏩ [НЕДОЗВОН 2 -> НДЗ 3] Сделка #{did} ({recruiter_name}) переведена в UC_NDZ3", flush=True)
+                    add_timeline_comment(did, f"🤖 Робот автодозвона: Зафиксирован повторный подтвержденный недозвон ({ring_duration or '30+'} сек гудков, код {failed_code}).\nСделка автоматически переведена: НДЗ 2 ➔ НДЗ 3.")
+                    print(f"⏩ [НЕДОЗВОН 2 -> НДЗ 3] Сделка #{did} ({recruiter_name}) переведена в UC_NDZ3 (гудки {ring_duration}с)", flush=True)
 
                 elif current_stage == "UC_NDZ3":
                     # Фиксируем третий недозвон
-                    add_timeline_comment(did, f"🤖 Робот автодозвона: Зафиксирован 3-й недозвон (0 сек). Сделка ожидает планового закрытия в 18:00 (Не выходит на связь).")
+                    add_timeline_comment(did, f"🤖 Робот автодозвона: Зафиксирован 3-й недозвон ({ring_duration or '30+'} сек гудков). Сделка ожидает планового закрытия в 18:00 (Не выходит на связь).")
                     print(f"⚠️ [НЕДОЗВОН 3] Сделка #{did} ({recruiter_name}) ожидает закрытия в 18:00", flush=True)
 
             # Сценарий 2: Успешный дозвон (кандидат взял трубку)
