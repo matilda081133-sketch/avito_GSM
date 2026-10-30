@@ -33,7 +33,7 @@ app = FastAPI(title="HR Cloud Autonomous Recruiter Service", version="2.7.2")
 
 ENABLE_AVITO_ASSISTANT = os.environ.get("ENABLE_AVITO_ASSISTANT", "True").lower() in ("true", "1", "yes")
 ENABLE_MAX_BOT = os.environ.get("ENABLE_MAX_BOT", "False").lower() in ("true", "1", "yes")
-ENABLE_B24_ENHANCER = os.environ.get("ENABLE_B24_ENHANCER", "True").lower() in ("true", "1", "yes")
+ENABLE_B24_ENHANCER = False  # ПОЛНОСТЬЮ ВЫКЛЮЧЕН: стадии и сделки вручную ведут рекрутеры
 
 threads_state = {
     "avito": None,
