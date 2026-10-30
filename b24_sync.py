@@ -611,15 +611,7 @@ def sync_candidate_to_b24_deal(chat_id: str, cand_data: dict, is_disqualified: b
 
             init_stage = 'NEW'
             init_cat_id = 0
-            if is_disqualified:
-                nt_cat, nt_st = get_non_target_category_info()
-                if nt_cat:
-                    init_cat_id = nt_cat
-                    init_stage = nt_st
-                else:
-                    init_stage = 'LOSE'
-            elif phone:
-                init_stage = 'UC_G0AG7S' if is_vahta else 'PREPARATION'
+            # Передвижение по воронкам и стадиям ОТКЛЮЧЕНО: все новые сделки только в воронке 0 на стадии NEW'
 
             deal_fields = {
                 'TITLE': " ".join(parts),
@@ -746,119 +738,15 @@ def sync_candidate_to_b24_deal(chat_id: str, cand_data: dict, is_disqualified: b
         if (existing_stage == 'NEW' or not existing_stage) and responsible_id != existing_assigned:
             upd_fields['ASSIGNED_BY_ID'] = responsible_id
 
-        # Маршрутизация стадий и воронок
-        if is_disqualified:
-            upd_fields['UF_CRM_1768823747857'] = '204'  # Причина неуспеха: Нецелевой
-            nt_cat_id, nt_stage = get_non_target_category_info()
-            if nt_cat_id:
-                if str(current_deal.get('CATEGORY_ID')) != str(nt_cat_id):
-                    # В Bitrix24 REST API crm.deal.update не меняет CATEGORY_ID существующей сделки.
-                    # Создаем сделку напрямую в воронке Нецелевые (44) и закрываем старую в воронке 0.
-                    cat44_fields = dict(upd_fields)
-                    cat44_fields['CATEGORY_ID'] = nt_cat_id
-                    cat44_fields['STAGE_ID'] = nt_stage
-                    cat44_fields['SOURCE_ID'] = current_deal.get('SOURCE_ID') or 'UC_25GHWZ'
-                    cat44_fields['ASSIGNED_BY_ID'] = current_deal.get('ASSIGNED_BY_ID') or responsible_id
-                    cat44_fields['CONTACT_ID'] = current_deal.get('CONTACT_ID')
-                    cat44_fields['UF_CRM_1770280572875'] = current_deal.get('UF_CRM_1770280572875') or f'https://www.avito.ru/profile/messenger/channel/{chat_id}'
-                    c44_res = call_b24('crm.deal.add', {'fields': cat44_fields})
-                    new_c44_id = c44_res.get('result')
-                    if new_c44_id:
-                        call_b24('crm.deal.update', {
-                            'id': deal_id, 
-                            'fields': {
-                                'STAGE_ID': 'LOSE', 
-                                'COMMENTS': f'Перенесено в воронку Нецелевые (сделка #{new_c44_id})'
-                            }
-                        })
-                        deal_id = new_c44_id
-                        print(f"[B24 SYNC] Сделка пересоздана в отдельной воронке 'Нецелевые': #{deal_id}")
-                else:
-                    upd_fields['STAGE_ID'] = nt_stage
-                    print(f"[B24 SYNC] Сделка #{deal_id} обновлена в воронке 'Нецелевые' (Stage: {nt_stage})")
-            else:
-                upd_fields['STAGE_ID'] = 'LOSE'
-                print(f"[B24 SYNC] Сделка #{deal_id} дисквалифицирована -> перемещена в стадию LOSE (Неуспех)")
-        elif existing_stage in ['EXECUTING', 'UC_NDZ2', 'UC_NDZ3']:
-            # ВОССТАНОВЛЕНИЕ ИЗ НДЗ: Кандидат ответил в чате!
-            is_vahta = "вахт" in (vacancy or "").lower() or (current_deal.get('UF_CRM_1768827146250') == '212')
-            target_stage = 'UC_G0AG7S' if is_vahta else 'PREPARATION'
-            upd_fields['STAGE_ID'] = target_stage
-            print(f"[B24 SYNC] Кандидат ответил в чате после НДЗ! Перевод сделки #{deal_id} в {target_stage}")
-            
-            # Ставим срочную автозадачу ответственному рекрутеру
-            deal_url = f"{B24_PORTAL_URL}/crm/deal/details/{deal_id}/"
-            cand_display_name = name or 'Кандидат'
-            task_title = f"🔥 ПЕРЕЗВОНИТЬ (ОТВЕТ ПОСЛЕ НДЗ): [{facility_name}] {cand_display_name} ({phone or 'в сделке'})"
-            task_desc = (
-                f"🚨 🔥 [B]КАНДИДАТ ОТВЕТИЛ В ЧАТЕ ПОСЛЕ НЕДОЗВОНА (НДЗ)![/B]\n\n"
-                f"📍 [B]Объект:[/B] [{facility_name}]\n"
-                f"👤 [B]Кандидат:[/B] {cand_display_name}\n"
-                f"📞 [B]Телефон:[/B] [B]{phone or 'в сделке'}[/B]\n\n"
-                f"👉 [B][URL={deal_url}]ОТКРЫТЬ СДЕЛКУ #{deal_id} И СРОЧНО ПЕРЕЗВОНИТЬ КАНДИДАТУ[/URL][/B]\n\n"
-                f"⏱ Норматив: совершить звонок в течение 10–15 минут!\n"
-                f"Стадия сделки автоматически возвращена из «НДЗ» в «В работе»."
-            )
-            try:
-                # Постановка задач менеджерам полностью отключена
-                pass
-                alert_text = (
-                    f"🚨 🔥 [B]ОТВЕТ ПОСЛЕ НДЗ ({facility_name})![/B]\n"
-                    f"Кандидат {cand_display_name} ({phone or 'номер в сделке'}) ответил в чате Авито!\n"
-                    f"⏱ Срочно наберите кандидата в течение 15 минут!\n"
-                    f"👉 [URL={deal_url}]Открыть сделку #{deal_id}[/URL]"
-                )
-                # Системное уведомление отключено по запросу пользователя
-                pass
-            except Exception as e_ndz:
-                print(f"[B24 SYNC ERROR] Ошибка постановки задачи после НДЗ: {e_ndz}")
-        elif phone:
-            # 1. Если сделка ранее была в воронке Нецелевые (44) из-за отсутствия телефона,
-            # а теперь номер получен -> ВЫВОДИМ В ВОРОНКУ СОИСКАТЕЛИ (Category 0)!
-            if str(current_deal.get('CATEGORY_ID')) == '44':
-                is_vahta = "вахт" in (vacancy or "").lower() or (current_deal.get('UF_CRM_1768827146250') == '212')
-                target_stage = 'UC_G0AG7S' if is_vahta else 'PREPARATION'
-                cat0_fields = dict(upd_fields)
-                cat0_fields['CATEGORY_ID'] = 0
-                cat0_fields['STAGE_ID'] = target_stage
-                cat0_fields['SOURCE_ID'] = current_deal.get('SOURCE_ID') or 'UC_25GHWZ'
-                cat0_fields['ASSIGNED_BY_ID'] = current_deal.get('ASSIGNED_BY_ID') or responsible_id
-                cat0_fields['CONTACT_ID'] = current_deal.get('CONTACT_ID')
-                cat0_fields['UF_CRM_1770280572875'] = current_deal.get('UF_CRM_1770280572875')
-                c0_res = call_b24('crm.deal.add', {'fields': cat0_fields})
-                new_c0_id = c0_res.get('result')
-                if new_c0_id:
-                    call_b24('crm.deal.update', {
-                        'id': deal_id,
-                        'fields': {
-                            'STAGE_ID': 'C44:WON',
-                            'COMMENTS': f'Получен номер телефона {phone}. Переведено в воронку Соискатели (сделка #{new_c0_id})'
-                        }
-                    })
-                    deal_id = new_c0_id
-                    print(f"[B24 SYNC] Кандидат предоставил номер {phone}! Сделка успешно выведена из 'Нецелевые' в воронку 'Соискатели': #{deal_id}")
-            elif existing_stage == 'NEW' or not existing_stage:
-                is_vahta = "вахт" in (vacancy or "").lower()
-                upd_fields['STAGE_ID'] = 'UC_G0AG7S' if is_vahta else 'PREPARATION'
-        elif not phone and not is_disqualified:
-            # 2. Если сделка создана Wappi в воронке 0 (Соискатели) БЕЗ НОМЕРА ТЕЛЕФОНА ->
-            # Переводим в воронку «Нецелевые» (44), чтобы не засорять воронку соискателей!
-            if str(current_deal.get('CATEGORY_ID')) == '0' and (existing_stage == 'NEW' or not existing_stage):
-                nt_cat_id, nt_stage = get_non_target_category_info() # 44, C44:NEW
-                if nt_cat_id:
-                    cat44_fields = dict(upd_fields)
-                    cat44_fields['CATEGORY_ID'] = nt_cat_id
-                    cat44_fields['STAGE_ID'] = nt_stage
-                    cat44_fields['SOURCE_ID'] = current_deal.get('SOURCE_ID') or 'UC_25GHWZ'
-                    cat44_fields['ASSIGNED_BY_ID'] = current_deal.get('ASSIGNED_BY_ID') or responsible_id
-                    cat44_fields['CONTACT_ID'] = current_deal.get('CONTACT_ID')
-                    cat44_fields['UF_CRM_1770280572875'] = current_deal.get('UF_CRM_1770280572875')
-                    c44_res = call_b24('crm.deal.add', {'fields': cat44_fields})
-                    new_c44_id = c44_res.get('result')
-                    if new_c44_id:
-                        call_b24('crm.deal.delete', {'id': deal_id})
-                        deal_id = new_c44_id
-                        print(f"[B24 SYNC] Сделка без номера переведена в воронку 'Нецелевые': #{deal_id} (старая сделка в воронке 0 удалена)")
+        # =====================================================================
+        # ФУНКЦИЯ ПЕРЕДВИЖЕНИЯ ПО ВОРОНКАМ И СТАДИЯМ ПОЛНОСТЬЮ НА СТОПЕ!
+        # Сделки НЕ перекидываются между воронками (Категория 0, 44 и т.д.)
+        # и НЕ меняют стадии автоматически. Робот работает строго в чатах.
+        # =====================================================================
+        if 'STAGE_ID' in upd_fields:
+            del upd_fields['STAGE_ID']
+        if 'CATEGORY_ID' in upd_fields:
+            del upd_fields['CATEGORY_ID']
 
         if upd_fields and str(current_deal.get('CATEGORY_ID')) != '44':
             call_b24('crm.deal.update', {'id': deal_id, 'fields': upd_fields})
