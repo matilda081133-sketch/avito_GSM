@@ -891,6 +891,11 @@ def bot_worker_loop():
 
 
 class HealthHandler(http.server.BaseHTTPRequestHandler):
+    def do_HEAD(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.end_headers()
+
     def do_GET(self):
         self.send_response(200)
         self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -910,6 +915,7 @@ class HealthHandler(http.server.BaseHTTPRequestHandler):
 
 def run_http_server():
     port = int(os.environ.get("PORT", 8080))
+    http.server.HTTPServer.allow_reuse_address = True
     server = http.server.HTTPServer(("0.0.0.0", port), HealthHandler)
     print(f"🌍 [HEALTHCHECK] HTTP сервер успешно запущен на порту {port}...", flush=True)
     server.serve_forever()

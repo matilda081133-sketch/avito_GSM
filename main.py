@@ -73,27 +73,58 @@ def ensure_threads_alive():
                 
         return restarted
 
+pings_history = []
+
 @app.get("/")
 @app.get("/health")
 @app.get("/healthz")
-def healthcheck():
+def healthcheck(request: Request):
     restarted = ensure_threads_alive()
     avito_alive = bool(threads_state.get("avito") and threads_state["avito"].is_alive())
     max_alive = bool(threads_state.get("max") and threads_state["max"].is_alive())
     b24_alive = bool(threads_state.get("b24") and threads_state["b24"].is_alive())
-    
+
+    client_ip = request.client.host if request.client else "unknown"
+    ua = request.headers.get("user-agent", "unknown")
+    now_ts = time.time()
+    now_str = time.strftime("%Y-%m-%d %H:%M:%S")
+
+    pings_history.append({
+        "time": now_str,
+        "ts": now_ts,
+        "ip": client_ip,
+        "user_agent": ua,
+        "path": request.url.path
+    })
+    if len(pings_history) > 100:
+        pings_history.pop(0)
+
     return {
         "status": "online",
         "service": "Avito + MAX Cloud AI Recruiter (GSM Logistics) 24/7",
-        "version": "2.7.0",
+        "version": "2.7.1",
         "threads": {
             "avito_alive": avito_alive,
             "max_alive": max_alive,
             "b24_alive": b24_alive
         },
         "restarted_on_ping": restarted,
+        "total_pings_received": len(pings_history),
+        "last_ping_user_agent": ua,
         "message": "Autonomous cloud recruiter online 24/7 with auto-healing watchdog",
-        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
+        "timestamp": now_str
+    }
+
+@app.get("/cron-status")
+def cron_status():
+    """Детальная диагностика работы внешнего cron-job пингера."""
+    cron_pings = [p for p in pings_history if "cron" in p.get("user_agent", "").lower()]
+    return {
+        "status": "ok",
+        "total_pings": len(pings_history),
+        "cron_detected": len(cron_pings) > 0,
+        "cron_pings_count": len(cron_pings),
+        "last_pings": pings_history[-20:]
     }
 
 
