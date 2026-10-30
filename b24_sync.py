@@ -127,6 +127,9 @@ def extract_facility_name(text: str = "", comments: str = "", vacancy_title: str
     АБИ Владимир, СДС Химки, Тепофол Кашира, Бьюти Москва, Арника Серпухов и др.
     """
     combined = f"{text or ''} {comments or ''} {vacancy_title or ''} {vacancy_url or ''}".lower()
+    # 0. Альфатехформ
+    if any(w in combined for w in ["альфатехформ", "альфатех", "альфа", "климовск", "klimovsk", "колбочк", "флакон"]):
+        return "Альфатехформ"
     if any(w in combined for w in ["9268686", "новосистем", "служебн", "техподдержк"]):
         return "Служебный звонок UIS"
     
@@ -292,15 +295,16 @@ def parse_and_enhance_deal(deal: dict) -> dict:
         m_age = re.search(r'\[Возраст(?: соискателя)?:\]\s*(\d+)', comments)
         if m_age: age = m_age.group(1).strip()
 
-    # Сборка чистого заголовка
-    parts = [f"[{object_name or 'Смарт Балашиха'}]", name_clean]
-    if phone: parts.append(phone)
-    meta = []
-    if age and age != "0": meta.append(f"{age}л")
-    if gender: meta.append(f"({gender})")
-    if meta: parts.append(" ".join(meta))
-    
-    new_title = " ".join([parts[0], " | ".join(parts[1:])])
+    # Сборка строгого заголовка: ТОЛЬКО [Объект] Имя Фамилия | Номер телефона
+    parts = [f"[{object_name or 'Смарт Балашиха'}]"]
+    body_parts = []
+    if name_clean and name_clean != "Кандидат":
+        body_parts.append(name_clean)
+    if phone:
+        body_parts.append(phone)
+    if not body_parts:
+        body_parts.append(name_clean or "Кандидат")
+    new_title = f"{parts[0]} {' | '.join(body_parts)}"
 
     # Обновление в Битрикс24
     calculated_proj_enum = get_project_enum_id(object_name, f"{vac_title} {comments} {vac_url}")
@@ -595,142 +599,19 @@ def sync_candidate_to_b24_deal(chat_id: str, cand_data: dict, is_disqualified: b
             proj_enum = cand_data.get('project_enum') or get_project_enum_id(facility_name, vacancy)
             is_vahta = "вахт" in (vacancy or "").lower() or "вахт" in (facility_name or "").lower()
             
-            parts = [f"[{facility_name}]"]
-            if is_disqualified:
-                parts.insert(0, "[НЕЦЕЛЕВОЙ]")
-            if cand_data.get('is_text_only'):
-                parts.insert(0, "[ТОЛЬКО ПИСАТЬ! НЕ ЗВОНИТЬ - ГЛУХОНЕМОЙ]")
-            if name:
-                name_parts = name.split()
-                clean_n = " ".join([p.capitalize() for p in name_parts[:2]])
-                parts.append(clean_n)
-            if phone:
-                parts.append(phone)
-            if age and age != "0":
-                parts.append(f"{age}л")
-
-            init_stage = 'NEW'
-            init_cat_id = 0
-            # Передвижение по воронкам и стадиям ОТКЛЮЧЕНО: все новые сделки только в воронке 0 на стадии NEW'
-
-            deal_fields = {
-                'TITLE': " ".join(parts),
-                'STAGE_ID': init_stage,
-                'SOURCE_ID': 'UC_25GHWZ', # Авито Прямой работодатель
-                'ASSIGNED_BY_ID': responsible_id,
-                'UF_CRM_1770280572875': f"https://www.avito.ru/profile/messenger/channel/{chat_id}",
-                'UF_CRM_1775470003043': facility_name,
-                'UF_CRM_1768815865773': proj_enum,
-                'UF_CRM_1768817930019': cand_data.get('vacancy', ''),
-                'UF_CRM_1768819383825': cand_data.get('vacancy_url', ''),
-                'UF_CRM_1768816011673': name or '',
-                'UF_CRM_1768816356722': str(age) if age else ''
-            }
-            if init_cat_id:
-                deal_fields['CATEGORY_ID'] = init_cat_id
-            if is_disqualified:
-                deal_fields['UF_CRM_1768823747857'] = '204'  # Причина неуспеха: Нецелевой
-
-            # Авто-заполнение гражданства (если кандидат ответил)
-            cit_val = cand_data.get('citizenship') or ''
-            cit_enum, _ = detect_citizenship_from_text(cit_val)
-            if cit_enum:
-                deal_fields['UF_CRM_1768816331873'] = cit_enum
-
-            # Авто-заполнение города проживания (если кандидат ответил)
-            city_val = cand_data.get('district') or cand_data.get('city') or ''
-            city_name, city_id = detect_city_from_text(city_val)
-            if city_name:
-                deal_fields['UF_CRM_1768816641561'] = city_name
-            if city_id:
-                deal_fields['UF_CRM_1768816560167'] = city_id
-
-            # Авто-заполнение поля НАПРАВЛЕН (96: На смену, 98: На заселение)
-            # и типа занятости (212: Вахта, 214: Местный/ подработка)
-            deal_fields['UF_CRM_1768816742475'] = '98' if is_vahta else '96'
-            deal_fields['UF_CRM_1768827146250'] = '212' if is_vahta else '214'
-
-            # Не передаем номер телефона и не создаем дубликаты контактов:
-            # Интеграция с Wappi уже подтягивает контакт и номер телефона к сделке!
-            pass
-            
-            if not deal_id:
-                d_res = call_b24('crm.deal.add', {'fields': deal_fields})
-                deal_id = d_res.get('result')
-                print(f"[B24 SYNC] Создана новая сделка #{deal_id} (Менеджер {responsible_id}) для чата {chat_id}")
-                current_deal = deal_fields
-        else:
-            # Сделка уже существовала ранее
-            if existing_stage == 'NEW' or not existing_stage:
-                # На стадии "Новый отклик" допустимо первичное закрепление или ротация
-                if existing_assigned in RECRUITER_IDS:
-                    responsible_id = existing_assigned
-                else:
-                    responsible_id = get_next_recruiter_id()
-            else:
-                # СТРОЖАЙШЕЕ ПРАВИЛО: стадия ушла дальше 'NEW' — менеджер зафиксирован НАВСЕГДА!
-                # Бот НИКОГДА не перезаписывает ASSIGNED_BY_ID!
-                responsible_id = existing_assigned if existing_assigned else get_next_recruiter_id()
-
-        comm = current_deal.get('COMMENTS', '') if current_deal else ''
-        existing_obj = current_deal.get('UF_CRM_1775470003043', '') if current_deal else ''
-        facility_name = cand_data.get('facility') or extract_facility_name(text=existing_obj or vacancy, comments=comm)
-        proj_enum = cand_data.get('project_enum') or get_project_enum_id(facility_name, vacancy)
-
-        upd_fields = {}
-        if name and not current_deal.get('UF_CRM_1768816011673'):
-            upd_fields['UF_CRM_1768816011673'] = name
-        if age and (not current_deal.get('UF_CRM_1768816356722') or current_deal.get('UF_CRM_1768816356722') == '0'):
-            upd_fields['UF_CRM_1768816356722'] = str(age)
-        
-        # Поле ПРОЕКТ заполняется ВСЕГДА автоматически
-        upd_fields['UF_CRM_1775470003043'] = facility_name
-        upd_fields['UF_CRM_1768815865773'] = proj_enum
-        if cand_data.get('vacancy') and not current_deal.get('UF_CRM_1768817930019'):
-            upd_fields['UF_CRM_1768817930019'] = cand_data.get('vacancy')
-        if cand_data.get('vacancy_url') and not current_deal.get('UF_CRM_1768819383825'):
-            upd_fields['UF_CRM_1768819383825'] = cand_data.get('vacancy_url')
-
-        # Поле НАПРАВЛЕН (96: На смену, 98: На заселение) исходя из стадий "В работе ВАХТА" или "В работе МЕСТНЫЕ"
-        is_deal_vahta = (
-            existing_stage == 'UC_G0AG7S' or 
-            'вахт' in (vacancy or '').lower() or 
-            'вахт' in (facility_name or '').lower() or
-            current_deal.get('UF_CRM_1768827146250') == '212'
-        )
-        upd_fields['UF_CRM_1768816742475'] = '98' if is_deal_vahta else '96'
-        upd_fields['UF_CRM_1768827146250'] = '212' if is_deal_vahta else '214'
-
-        # Авто-заполнение гражданства (если кандидат ответил, а в сделке еще не заполнено)
-        cit_val = cand_data.get('citizenship') or ''
-        cit_enum, _ = detect_citizenship_from_text(cit_val)
-        if cit_enum and not current_deal.get('UF_CRM_1768816331873'):
-            upd_fields['UF_CRM_1768816331873'] = cit_enum
-
-        # Авто-заполнение города проживания (если кандидат ответил, а в сделке еще не заполнено)
-        city_val = cand_data.get('district') or cand_data.get('city') or ''
-        city_name, city_id = detect_city_from_text(city_val)
-        if city_name and not current_deal.get('UF_CRM_1768816641561'):
-            upd_fields['UF_CRM_1768816641561'] = city_name
-        if city_id and not current_deal.get('UF_CRM_1768816560167'):
-            upd_fields['UF_CRM_1768816560167'] = city_id
-
-        # Обновление заголовка сделки: строго [Объект] Имя | Телефон | Возраст
+            # Строгий формат: [Объект] Имя Фамилия | Номер телефона
+            # Строгий формат: [Объект] Имя Фамилия | Номер телефона
         parts = [f"[{facility_name}]"]
-        if is_disqualified:
-            parts.insert(0, "[НЕЦЕЛЕВОЙ]")
-        if cand_data.get('is_text_only'):
-            parts.insert(0, "[ТОЛЬКО ПИСАТЬ! НЕ ЗВОНИТЬ - ГЛУХОНЕМОЙ]")
+        body_parts = []
         if name:
-            name_parts = name.split()
-            clean_n = " ".join([p.capitalize() for p in name_parts[:2]])
-            parts.append(clean_n)
+            clean_n = " ".join([p.capitalize() for p in name.split()[:2]])
+            body_parts.append(clean_n)
         if phone:
-            parts.append(phone)
-        if age and age != "0":
-            parts.append(f"{age}л")
+            body_parts.append(phone)
+        if not body_parts:
+            body_parts.append("Кандидат")
 
-        upd_fields['TITLE'] = " ".join(parts)
+        upd_fields['TITLE'] = f"{parts[0]} {' | '.join(body_parts)}"
         if not current_deal.get('SOURCE_ID'):
             upd_fields['SOURCE_ID'] = 'UC_25GHWZ'
 
