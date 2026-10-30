@@ -1,27 +1,29 @@
 # -*- coding: utf-8 -*-
 """
-Сервис автоматического робота-дозвона по стадиям НДЗ (Битрикс24)
+Полноценный боевой робот автодозвона НДЗ через официальный UIS Call API и Битрикс24:
 
-Параметры и правила:
-1. График: Понедельник - Пятница с 09:00 до 18:00 МСК. Суббота и Воскресенье - выходные (пауза).
-2. Ответственные менеджеры (строгая изоляция):
-   - 84822: Анна Боркина (+7 986 089-81-98)
-   - 84102: Анастасия Давыдова (+7 986 089-82-06)
-   - 81596: Маргарита Бабынина (+7 967 787-53-02)
-   Никакого перераспределения чужих сделок! Каждый менеджер обзванивает исключительно свои сделки.
-3. Темп и параллельность:
-   - Ровно 1 звонок на менеджера раз в 3 минуты (180 сек).
-   - Одновременно до 3 параллельных вызовов (по 1 сделке на каждого из 3 менеджеров).
-4. Очередь звонков (LIFO):
-   - Сначала самые свежие сделки (ID DESC).
-   - Очередность стадий: НДЗ 1 (EXECUTING) -> НДЗ 2 (UC_NDZ2) -> НДЗ 3 (UC_NDZ3).
-5. При дозвоне (кандидат взял трубку, длительность > 0):
-   - Мгновенная прямая связь с менеджером.
-   - Робот НЕ переводит сделку; стадию вручную определяет рекрутер.
-6. При недозвонах (длительность = 0 / сброс / не берет):
-   - НДЗ 1 (EXECUTING) -> перевод в НДЗ 2 (UC_NDZ2)
-   - НДЗ 2 (UC_NDZ2) -> перевод в НДЗ 3 (UC_NDZ3)
-   - В 18:00 сделки из НДЗ 3 (UC_NDZ3) -> закрытие в LOSE (причина 218 'Не выходит на связь')
+1. Физический дозвон (UIS):
+   - Инициирует реальный сотовый вызов кандидату через start.simple_call в UIS Call API.
+   - При ответе кандидата: мгновенное прямое соединение с софтфоном/телефоном ответственного рекрутера.
+   - У рекрутера в наушниках звенит звонок и горит кнопка «Взять трубку» с открытием карточки сделки.
+
+2. Рекрутеры и привязка линий:
+   - Анна Боркина (ID 84822): виртуальный номер 79860898198 -> софтфон 79250940706
+   - Анастасия Давыдова (ID 84102): виртуальный номер 79860898206 -> софтфон 79250940705
+   - Маргарита Бабынина (ID 81596): виртуальный номер 79677875302 -> софтфон 79250940713
+
+3. Темп, интервалы и антиспам:
+   - Ровно 1 вызов каждые 3 минуты (180 сек) на каждого менеджера.
+   - До 3 параллельных вызовов одновременно (по 1 сделке на каждого рекрутера).
+   - Антиспам-пауза: не менее 2.5 часов (9000 сек) перед повторным звонком тому же кандидату.
+   - График: Пн-Пт с 09:00 до 18:00 МСК. Вне графика и в выходные — пауза.
+
+4. Контроль исходов и каскад стадий:
+   - Правило 30 секунд: недозвон засчитывается строго при гудках >= 30 сек.
+   - НДЗ 1 (EXECUTING) -> НДЗ 2 (UC_NDZ2)
+   - НДЗ 2 (UC_NDZ2) -> НДЗ 3 (UC_NDZ3)
+   - В 18:00: все оставшиеся сделки НДЗ 3 -> закрытие в LOSE (причина 218 'Не выходит на связь').
+   - При дозвоне: стадия остается на рекрутере (робот не переводит).
 """
 
 import sys
@@ -34,13 +36,28 @@ import requests
 
 sys.stdout.reconfigure(encoding='utf-8', line_buffering=True)
 
-WEBHOOK_URL = "https://b24-4qx38o.bitrix24.ru/rest/39250/7cbs7mg1qo0vn0ov/"
+B24_WEBHOOK_URL = "https://b24-4qx38o.bitrix24.ru/rest/39250/7cbs7mg1qo0vn0ov/"
+UIS_CALL_API_URL = "https://callapi.uiscom.ru/v4.0"
+UIS_ACCESS_TOKEN = "mf050x3n53jnp4dft29ww26x7jm4y33rd6sd5rgw"
+
 MSK_TZ = timezone(timedelta(hours=3))
 
 RECRUITERS = {
-    84822: {"name": "Анна Боркина", "phone": "+79860898198"},
-    84102: {"name": "Анастасия Давыдова", "phone": "+79860898206"},
-    81596: {"name": "Маргарита Бабынина", "phone": "+79677875302"}
+    84822: {
+        "name": "Анна Боркина",
+        "operator_phone": "79250940706",
+        "virtual_phone": "79860898198"
+    },
+    84102: {
+        "name": "Анастасия Давыдова",
+        "operator_phone": "79250940705",
+        "virtual_phone": "79860898206"
+    },
+    81596: {
+        "name": "Маргарита Бабынина",
+        "operator_phone": "79250940713",
+        "virtual_phone": "79677875302"
+    }
 }
 
 INTERVAL_SECONDS = 180  # Ровно 3 минуты между звонками на одного менеджера
@@ -49,11 +66,26 @@ STATE_FILE = os.path.join(os.path.dirname(__file__), "ndz_dialer_state.json")
 def call_b24(method, params=None):
     for attempt in range(3):
         try:
-            r = requests.post(f"{WEBHOOK_URL}{method}", json=params or {}, timeout=15)
+            r = requests.post(f"{B24_WEBHOOK_URL}{method}", json=params or {}, timeout=15)
             return r.json()
-        except Exception as e:
+        except Exception:
             time.sleep(1)
     return {}
+
+def call_uis_api(method, params=None):
+    payload = {
+        "jsonrpc": "2.0",
+        "id": int(time.time() * 1000),
+        "method": method,
+        "params": params or {}
+    }
+    payload["params"]["access_token"] = UIS_ACCESS_TOKEN
+    try:
+        r = requests.post(UIS_CALL_API_URL, json=payload, timeout=12)
+        return r.json()
+    except Exception as e:
+        print(f"Ошибка вызова UIS Call API ({method}): {e}", flush=True)
+        return {}
 
 def is_working_hours():
     now = datetime.now(MSK_TZ)
@@ -71,7 +103,7 @@ def load_state():
         try:
             with open(STATE_FILE, "r", encoding="utf-8") as f:
                 return json.load(f)
-        except:
+        except Exception:
             pass
     return {"called_today": {}, "last_call_time": {}, "processed_call_ids": []}
 
@@ -79,7 +111,7 @@ def save_state(state):
     try:
         with open(STATE_FILE, "w", encoding="utf-8") as f:
             json.dump(state, f, ensure_ascii=False, indent=2)
-    except:
+    except Exception:
         pass
 
 def add_timeline_comment(entity_id, comment_text, entity_type="deal"):
@@ -119,9 +151,18 @@ def extract_phone_from_deal(deal):
             return re.sub(r'[^\d+]', '', phones[0].get("VALUE"))
     return ""
 
+def normalize_phone_for_uis(phone_raw):
+    ph = re.sub(r'[^\d]', '', str(phone_raw))
+    if len(ph) == 11 and ph.startswith('8'):
+        ph = '7' + ph[1:]
+    elif len(ph) == 10:
+        ph = '7' + ph
+    return ph
+
 def get_next_ndz_deal_for_recruiter(user_id, called_today):
     """
     Выбирает самую свежую сделку менеджера из стадий НДЗ 1, 2, 3 (LIFO: ID DESC)
+    Соблюдает строгую паузу 2.5 часа между повторными звонками одному кандидату.
     """
     for st in ["EXECUTING", "UC_NDZ2", "UC_NDZ3"]:
         res = call_b24("crm.deal.list", {
@@ -131,21 +172,22 @@ def get_next_ndz_deal_for_recruiter(user_id, called_today):
                 "STAGE_ID": st
             },
             "select": ["ID", "TITLE", "STAGE_ID", "ASSIGNED_BY_ID", "COMMENTS", "CONTACT_ID", "DATE_CREATE"],
-            "limit": 20
+            "limit": 25
         })
         deals = res.get("result", [])
         for d in deals:
             did = str(d.get("ID"))
-            # Если уже звонили по этой сделке: выдерживаем паузу не менее 2.5 часов (9000 сек)
-            # Защита от спама и блокировок операторами связи!
+            # Антиспам-пауза 2.5 часа (9000 сек)
             last_info = called_today.get(did)
             if last_info:
                 last_t = last_info.get("timestamp", 0)
-                if time.time() - last_t < 9000:  # 2.5 часа пауза между повторными попытками
+                if time.time() - last_t < 9000:
                     continue
             phone = extract_phone_from_deal(d)
             if phone:
-                return d, phone, st
+                norm_ph = normalize_phone_for_uis(phone)
+                if len(norm_ph) == 11:
+                    return d, norm_ph, st
     return None, None, None
 
 def check_recent_call_results(state):
@@ -158,12 +200,11 @@ def check_recent_call_results(state):
     now = datetime.now(MSK_TZ)
     processed_ids = set(state.setdefault("processed_call_ids", []))
     
-    # Запрашиваем звонки за последний 1 час
     since_time = (now - timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S")
     stats = call_b24("voximplant.statistic.get", {
-        "FILTER": {
-            ">CALL_START_DATE": since_time
-        },
+        "FILTER": {">CALL_START_DATE": since_time},
+        "SORT": "CALL_START_DATE",
+        "ORDER": "DESC",
         "LIMIT": 50
     }).get("result", [])
 
@@ -178,7 +219,6 @@ def check_recent_call_results(state):
             continue
         
         call_type = str(c.get("CALL_TYPE")) # 1 - входящий, 2 - исходящий
-        # Анализируем исходящие звонки рекрутеров
         if call_type != "2":
             processed_ids.add(cid)
             continue
@@ -189,7 +229,6 @@ def check_recent_call_results(state):
         contact_id = c.get("CRM_ENTITY_ID") if c.get("CRM_ENTITY_TYPE") == "CONTACT" else None
         deal_id = c.get("CRM_ENTITY_ID") if c.get("CRM_ENTITY_TYPE") == "DEAL" else None
 
-        # Найти сделку
         found_deal = None
         if deal_id:
             d_res = call_b24("crm.deal.get", {"id": deal_id}).get("result")
@@ -211,11 +250,10 @@ def check_recent_call_results(state):
         current_stage = found_deal.get("STAGE_ID")
         deal_owner = int(found_deal.get("ASSIGNED_BY_ID") or 0)
 
-        # Проверяем, находится ли сделка в НДЗ
         if current_stage in ["EXECUTING", "UC_NDZ2", "UC_NDZ3"]:
             recruiter_name = RECRUITERS.get(deal_owner, {}).get("name", f"ID {deal_owner}")
             
-            # Переименовываем тему звонка в CRM на "Автопрозвон НДЗ"
+            # Переименовываем тему активности в Битрикс24
             activity_id = c.get("CRM_ACTIVITY_ID")
             if activity_id:
                 try:
@@ -228,8 +266,6 @@ def check_recent_call_results(state):
 
             # Сценарий 1: Недозвон (длительность = 0 сек или код сброса)
             if dur == 0 or failed_code in ["304", "603", "486", "487", "404", "503"]:
-                # Требование: вызов должен длиться не менее 30 секунд, чтобы засчитать недозвон!
-                # Проверяем длительность дозвона/гудков через связанную активность Битрикс24
                 ring_duration = 0
                 if activity_id:
                     act_res = call_b24("crm.activity.get", {"id": activity_id}).get("result", {})
@@ -243,15 +279,14 @@ def check_recent_call_results(state):
                         except Exception:
                             pass
 
-                # Если дозвон шел меньше 30 секунд — недозвон НЕ ставится (быстрый сброс / ошибка)
+                # Защита: гудки должны длиться не менее 30 секунд
                 if ring_duration > 0 and ring_duration < 30:
-                    print(f"⏳ [НЕДОЗВОН ОТКЛОНЕН] Сделка #{did} ({recruiter_name}) — гудки длились {ring_duration} сек (< 30 сек). Недозвон не засчитывается!", flush=True)
-                    add_timeline_comment(did, f"⏳ Автопрозвон НДЗ: Звонок длился {ring_duration} сек (< 30 сек).\nПо правилам недозвон засчитывается только при вызове от 30 секунд. Стадия сохранена.")
+                    print(f"⏳ [НЕДОЗВОН ОТКЛОНЕН] Сделка #{did} ({recruiter_name}) — гудки длились {ring_duration} сек (< 30 сек). Стадия не трогается.", flush=True)
+                    add_timeline_comment(did, f"⏳ Автопрозвон НДЗ: Вызов длился {ring_duration} сек (< 30 сек).\nПо правилам недозвон засчитывается только при вызове от 30 секунд. Стадия сохранена.")
                     processed_ids.add(cid)
                     continue
 
                 if current_stage == "EXECUTING":
-                    # Перевод в НДЗ 2
                     call_b24("crm.deal.update", {
                         "id": did,
                         "fields": {"STAGE_ID": "UC_NDZ2"}
@@ -260,7 +295,6 @@ def check_recent_call_results(state):
                     print(f"⏩ [НЕДОЗВОН 1 -> НДЗ 2] Сделка #{did} ({recruiter_name}) переведена в UC_NDZ2 (гудки {ring_duration}с)", flush=True)
 
                 elif current_stage == "UC_NDZ2":
-                    # Перевод в НДЗ 3
                     call_b24("crm.deal.update", {
                         "id": did,
                         "fields": {"STAGE_ID": "UC_NDZ3"}
@@ -269,7 +303,6 @@ def check_recent_call_results(state):
                     print(f"⏩ [НЕДОЗВОН 2 -> НДЗ 3] Сделка #{did} ({recruiter_name}) переведена в UC_NDZ3 (гудки {ring_duration}с)", flush=True)
 
                 elif current_stage == "UC_NDZ3":
-                    # Фиксируем третий недозвон
                     add_timeline_comment(did, f"🤖 Автопрозвон НДЗ: Зафиксирован 3-й недозвон ({ring_duration or '30+'} сек гудков). Сделка ожидает планового закрытия в 18:00 (Не выходит на связь).")
                     print(f"⚠️ [НЕДОЗВОН 3] Сделка #{did} ({recruiter_name}) ожидает закрытия в 18:00", flush=True)
 
@@ -280,7 +313,6 @@ def check_recent_call_results(state):
 
         processed_ids.add(cid)
 
-    # Оставляем в памяти только последние 200 call_id
     state["processed_call_ids"] = list(processed_ids)[-200:]
     save_state(state)
 
@@ -289,7 +321,6 @@ def close_eod_ndz3_deals():
     В 18:00 закрывает оставшиеся сделки НДЗ 3 в LOSE с причиной 218 'Не выходит на связь'
     """
     now = datetime.now(MSK_TZ)
-    # Запуск только между 18:00 и 18:15 в будние дни
     if now.weekday() < 5 and now.hour == 18 and now.minute <= 15:
         for uid, uinfo in RECRUITERS.items():
             res = call_b24("crm.deal.list", {
@@ -309,7 +340,7 @@ def close_eod_ndz3_deals():
                         "UF_CRM_1768823747857": 218 # Не выходит на связь
                     }
                 })
-                add_timeline_comment(did, "🤖 Робот автодозвона: Завершение рабочего дня в 18:00. После серии недозвонов сделка закрыта в Неуспех (Не выходит на связь).")
+                add_timeline_comment(did, "🤖 Автопрозвон НДЗ: Завершение рабочего дня в 18:00. После серии недозвонов сделка закрыта в Неуспех (Не выходит на связь).")
                 print(f"🔴 [18:00 ЗАКРЫТИЕ В LOSE] Сделка #{did} ({uinfo['name']}) -> Неуспех (Не выходит на связь)", flush=True)
 
 def run_dialer_step():
@@ -318,13 +349,12 @@ def run_dialer_step():
     is_ok, reason = is_working_hours()
     
     state = load_state()
-    # Сброс счетчика при наступлении нового дня
     if state.get("current_date") != today_str:
         state["current_date"] = today_str
         state["called_today"] = {}
         save_state(state)
 
-    # Проверка результатов недавних звонков и продвижение стадий
+    # Проверка результатов звонков и каскада стадий
     check_recent_call_results(state)
 
     # Проверка закрытия НДЗ 3 в 18:00
@@ -342,18 +372,15 @@ def run_dialer_step():
         uname = uinfo["name"]
         uid_str = str(uid)
         
-        # Проверка интервала 3 минуты (180 сек) на этого менеджера
+        # Проверка интервала 3 минуты (180 сек)
         last_t = last_call_time.get(uid_str, 0)
         time_since_last = time.time() - last_t
         if time_since_last < INTERVAL_SECONDS:
-            remaining = int(INTERVAL_SECONDS - time_since_last)
-            # Еще действует интервал 3 минуты для данного менеджера
             continue
 
         # Получаем следующую сделку для этого менеджера (строго его личную!)
         deal, phone, stage = get_next_ndz_deal_for_recruiter(uid, called_today)
         if not deal:
-            # Нет сделок в очереди НДЗ для этого менеджера
             continue
 
         did = deal.get("ID")
@@ -361,24 +388,44 @@ def run_dialer_step():
         stage_names = {"EXECUTING": "НДЗ 1", "UC_NDZ2": "НДЗ 2", "UC_NDZ3": "НДЗ 3"}
         st_label = stage_names.get(stage, stage)
 
-        print(f"\n📞 [ОЧЕРЕДЬ НДЗ] Рекрутер: {uname} | Сделка #{did} ({dtitle}) | Тел: {phone} | Стадия: {st_label}", flush=True)
+        op_phone = uinfo["operator_phone"]
+        virt_phone = uinfo["virtual_phone"]
 
-        # Фиксируем отметку в состоянии очереди
-        last_call_time[uid_str] = time.time()
-        called_today[str(did)] = {
-            "time": now_dt.isoformat(),
-            "timestamp": time.time(),
-            "stage": stage,
-            "user_id": uid
-        }
-        save_state(state)
+        print(f"\n🚀 [ИНИЦИАЦИЯ ВЫЗОВА UIS] {uname} -> Сделка #{did} | Тел: +{phone} | Линия: +{virt_phone} | Стадия: {st_label}", flush=True)
 
-print("🚀 Сервис автодозвона НДЗ запущен. Контроль расписания: Пн-Пт 09:00-18:00, интервал 3 мин.", flush=True)
+        # Вызываем метод UIS Call API start.simple_call
+        uis_res = call_uis_api("start.simple_call", {
+            "first_call": "contact", # Сначала кандидат, при ответе мгновенный перевод на оператора
+            "contact": phone,
+            "operator": op_phone,
+            "virtual_phone_number": virt_phone
+        })
+
+        res_data = uis_res.get("result", {}).get("data", {})
+        session_id = res_data.get("call_session_id")
+        err = uis_res.get("error")
+
+        if session_id:
+            print(f"✅ [ВЫЗОВ ОТПРАВЛЕН В UIS] Session ID: {session_id} | Звонок кандидату пошел!", flush=True)
+            last_call_time[uid_str] = time.time()
+            called_today[str(did)] = {
+                "time": now_dt.isoformat(),
+                "timestamp": time.time(),
+                "stage": stage,
+                "session_id": session_id,
+                "user_id": uid
+            }
+            save_state(state)
+            add_timeline_comment(did, f"📞 Автопрозвон НДЗ: Инициирован реальный голосовой вызов кандидату +{phone} через UIS.\nОтветственный рекрутер: {uname}.\nСтадия: {st_label}.\nСессия UIS: {session_id}")
+        else:
+            print(f"❌ [ОШИБКА UIS] Не удалось запустить звонок для {uname} на +{phone}: {err}", flush=True)
+
+print("🚀 Боевой сервис автодозвона НДЗ запущен (UIS Call API + Битрикс24).", flush=True)
 
 if __name__ == "__main__":
     while True:
         try:
             run_dialer_step()
         except Exception as e:
-            print(f"Ошибка в цикле автодозвона: {e}", flush=True)
+            print(f"Ошибка в основном цикле автодозвона: {e}", flush=True)
         time.sleep(15)
