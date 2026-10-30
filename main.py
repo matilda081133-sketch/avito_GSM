@@ -29,7 +29,7 @@ if sys.stderr is not None:
 
 from config import PORT, HOST, AVITO_CLIENT_ID, AVITO_CLIENT_SECRET, AVITO_USER_ID
 
-app = FastAPI(title="HR Cloud Autonomous Recruiter Service", version="2.5.0")
+app = FastAPI(title="HR Cloud Autonomous Recruiter Service", version="2.7.2")
 
 ENABLE_AVITO_ASSISTANT = os.environ.get("ENABLE_AVITO_ASSISTANT", "True").lower() in ("true", "1", "yes")
 ENABLE_MAX_BOT = os.environ.get("ENABLE_MAX_BOT", "False").lower() in ("true", "1", "yes")
@@ -102,7 +102,7 @@ def healthcheck(request: Request):
     return {
         "status": "online",
         "service": "Avito + MAX Cloud AI Recruiter (GSM Logistics) 24/7",
-        "version": "2.7.1",
+        "version": "2.7.2",
         "threads": {
             "avito_alive": avito_alive,
             "max_alive": max_alive,
