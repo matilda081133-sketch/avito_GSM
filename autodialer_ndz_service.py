@@ -1,16 +1,16 @@
 # -*- coding: utf-8 -*-
 """
-Полноценный боевой робот автодозвона НДЗ через официальный UIS Call API и Битрикс24:
+Полноценный боевой робот автодозвона НДЗ через официальный UIS Call API (start.employee_call) и Битрикс24:
 
-1. Физический дозвон (UIS):
-   - Инициирует реальный сотовый вызов кандидату через start.simple_call в UIS Call API.
-   - При ответе кандидата: мгновенное прямое соединение с софтфоном/телефоном ответственного рекрутера.
-   - У рекрутера в наушниках звенит звонок и горит кнопка «Взять трубку» с открытием карточки сделки.
+1. Физический дозвон (UIS ВАТС):
+   - Вызывает метод start.employee_call с официальными UIS Employee ID.
+   - Вызов направляется строго в софтфон/приложение UIS ответственного рекрутера.
+   - Логика: сначала звонит кандидат, как только он берет трубку («Алло») -> мгновенная прямая коммутация в наушники рекрутеру с открытием карточки сделки в Битрикс24.
 
-2. Рекрутеры и привязка линий:
-   - Анна Боркина (ID 84822): виртуальный номер 79860898198 -> софтфон 79250940706
-   - Анастасия Давыдова (ID 84102): виртуальный номер 79860898206 -> софтфон 79250940705
-   - Маргарита Бабынина (ID 81596): виртуальный номер 79677875302 -> софтфон 79250940713
+2. Привязка рекрутеров к UIS Employee ID:
+   - Анна Боркина (B24: 84822): UIS Employee ID 10382998 | Виртуальная линия: 79860898198
+   - Анастасия Давыдова (B24: 84102): UIS Employee ID 10373578 | Виртуальная линия: 79860898206
+   - Маргарита Бабынина (B24: 81596): UIS Employee ID 10351298 | Виртуальная линия: 79677875302
 
 3. Темп, интервалы и антиспам:
    - Ровно 1 вызов каждые 3 минуты (180 сек) на каждого менеджера.
@@ -45,17 +45,17 @@ MSK_TZ = timezone(timedelta(hours=3))
 RECRUITERS = {
     84822: {
         "name": "Анна Боркина",
-        "operator_phone": "79250940706",
+        "uis_employee_id": 10382998,
         "virtual_phone": "79860898198"
     },
     84102: {
         "name": "Анастасия Давыдова",
-        "operator_phone": "79250940705",
+        "uis_employee_id": 10373578,
         "virtual_phone": "79860898206"
     },
     81596: {
         "name": "Маргарита Бабынина",
-        "operator_phone": "79250940713",
+        "uis_employee_id": 10351298,
         "virtual_phone": "79677875302"
     }
 }
@@ -388,16 +388,17 @@ def run_dialer_step():
         stage_names = {"EXECUTING": "НДЗ 1", "UC_NDZ2": "НДЗ 2", "UC_NDZ3": "НДЗ 3"}
         st_label = stage_names.get(stage, stage)
 
-        op_phone = uinfo["operator_phone"]
+        emp_id = uinfo["uis_employee_id"]
         virt_phone = uinfo["virtual_phone"]
 
-        print(f"\n🚀 [ИНИЦИАЦИЯ ВЫЗОВА UIS] {uname} -> Сделка #{did} | Тел: +{phone} | Линия: +{virt_phone} | Стадия: {st_label}", flush=True)
+        print(f"\n🚀 [ИНИЦИАЦИЯ ВЫЗОВА В СОФТФОН UIS] {uname} (Employee ID: {emp_id}) -> Сделка #{did} | Тел кандидата: +{phone} | Линия: +{virt_phone} | Стадия: {st_label}", flush=True)
 
-        # Вызываем метод UIS Call API start.simple_call
-        uis_res = call_uis_api("start.simple_call", {
-            "first_call": "contact", # Сначала кандидат, при ответе мгновенный перевод на оператора
+        # Вызываем официальный метод UIS Call API start.employee_call:
+        # Звонок идет кандидату, и при ответе мгновенно направляется строго в софтфон UIS рекрутера!
+        uis_res = call_uis_api("start.employee_call", {
+            "first_call": "contact", # Сначала кандидат, при ответе мгновенный перевод в софтфон
             "contact": phone,
-            "operator": op_phone,
+            "employee": {"id": emp_id},
             "virtual_phone_number": virt_phone
         })
 
@@ -406,7 +407,7 @@ def run_dialer_step():
         err = uis_res.get("error")
 
         if session_id:
-            print(f"✅ [ВЫЗОВ ОТПРАВЛЕН В UIS] Session ID: {session_id} | Звонок кандидату пошел!", flush=True)
+            print(f"✅ [ВЫЗОВ ОТПРАВЛЕН В СОФТФОН UIS] Session ID: {session_id} | Звонок кандидату пошел!", flush=True)
             last_call_time[uid_str] = time.time()
             called_today[str(did)] = {
                 "time": now_dt.isoformat(),
@@ -416,11 +417,11 @@ def run_dialer_step():
                 "user_id": uid
             }
             save_state(state)
-            add_timeline_comment(did, f"📞 Автопрозвон НДЗ: Инициирован реальный голосовой вызов кандидату +{phone} через UIS.\nОтветственный рекрутер: {uname}.\nСтадия: {st_label}.\nСессия UIS: {session_id}")
+            add_timeline_comment(did, f"📞 Автопрозвон НДЗ: Инициирован вызов кандидату +{phone} через UIS.\nОтветственный рекрутер: {uname} (софтфон UIS).\nСтадия: {st_label}.\nСессия UIS: {session_id}")
         else:
             print(f"❌ [ОШИБКА UIS] Не удалось запустить звонок для {uname} на +{phone}: {err}", flush=True)
 
-print("🚀 Боевой сервис автодозвона НДЗ запущен (UIS Call API + Битрикс24).", flush=True)
+print("🚀 Боевой сервис автодозвона НДЗ запущен (UIS start.employee_call + Битрикс24).", flush=True)
 
 if __name__ == "__main__":
     while True:
