@@ -361,32 +361,17 @@ def run_dialer_step():
         stage_names = {"EXECUTING": "НДЗ 1", "UC_NDZ2": "НДЗ 2", "UC_NDZ3": "НДЗ 3"}
         st_label = stage_names.get(stage, stage)
 
-        print(f"\n📞 [ВЫЗОВ РОБОТА] Рекрутер: {uname} | Сделка #{did} ({dtitle}) | Тел: {phone} | Стадия: {st_label}", flush=True)
+        print(f"\n📞 [ОЧЕРЕДЬ НДЗ] Рекрутер: {uname} | Сделка #{did} ({dtitle}) | Тел: {phone} | Стадия: {st_label}", flush=True)
 
-        # 1. Регистрация вызова в Битрикс24 (открывает всплывающую карточку звонка рекрутеру на экране)
-        call_res = call_b24("telephony.externalcall.register", {
-            "USER_ID": uid,
-            "PHONE_NUMBER": phone,
-            "TYPE": 2, # Исходящий
-            "CRM_ENTITY_TYPE": "DEAL",
-            "CRM_ENTITY_ID": did,
-            "SHOW": 1  # Показать карточку вызова в Битрикс24
-        })
-        call_id = call_res.get("result", {}).get("CALL_ID")
-        
-        # 2. Фиксируем время звонка в состоянии
+        # Фиксируем отметку в состоянии очереди
         last_call_time[uid_str] = time.time()
         called_today[str(did)] = {
             "time": now_dt.isoformat(),
             "timestamp": time.time(),
             "stage": stage,
-            "call_id": call_id,
             "user_id": uid
         }
         save_state(state)
-
-        # 3. Добавляем уведомление в таймлайн сделки
-        add_timeline_comment(did, f"📞 Робот автодозвона инициировал вызов кандидату {phone}.\nОтветственный: {uname}.\nСтадия: {st_label}.")
 
 print("🚀 Сервис автодозвона НДЗ запущен. Контроль расписания: Пн-Пт 09:00-18:00, интервал 3 мин.", flush=True)
 
