@@ -136,11 +136,12 @@ def get_next_ndz_deal_for_recruiter(user_id, called_today):
         deals = res.get("result", [])
         for d in deals:
             did = str(d.get("ID"))
-            # Если уже звонили по этой сделке за последние 15 минут в текущей сессии
+            # Если уже звонили по этой сделке: выдерживаем паузу не менее 2.5 часов (9000 сек)
+            # Защита от спама и блокировок операторами связи!
             last_info = called_today.get(did)
             if last_info:
                 last_t = last_info.get("timestamp", 0)
-                if time.time() - last_t < 900:  # 15 минут перерыв между повторными попытками по одной сделке
+                if time.time() - last_t < 9000:  # 2.5 часа пауза между повторными попытками
                     continue
             phone = extract_phone_from_deal(d)
             if phone:
