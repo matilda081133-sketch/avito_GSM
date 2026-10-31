@@ -189,14 +189,21 @@ async def avito_webhook(request: Request):
             try:
                 from run_demo_assistant import client, process_valeria_chat
                 chat_info = client.get_chat_messages(chat_id)
-                # Получаем метаданные чата
-                raw_chats = client.get_chats(unread_only=False)
+                # Получаем метаданные чата (title, item_id, url)
+                raw_chats = client.get_recent_chats(limit=30)
                 c_item = next((c for c in raw_chats if c.get("id") == chat_id), {})
-                c_title = c_item.get("context", {}).get("value", {}).get("title", "")
-                c_user = c_item.get("users", [{}])[0].get("name", "Кандидат")
+                c_ctx = c_item.get("context", {}).get("value", {})
+                c_title = c_ctx.get("title", "")
+                c_item_id = str(c_ctx.get("id", ""))
+                c_item_url = c_ctx.get("url", "")
+                c_user = "Кандидат"
+                for u in c_item.get("users", []):
+                    if u.get("id") != AVITO_USER_ID:
+                        c_user = u.get("name", "Кандидат")
+                        break
                 
                 msgs = list(reversed(chat_info))
-                process_valeria_chat(chat_id, c_user, c_title, msgs)
+                process_valeria_chat(chat_id, c_user, c_title, msgs, item_id=c_item_id, item_url=c_item_url)
             except Exception as e_proc:
                 print(f"[AVITO WEBHOOK ERROR] Ошибка обработки: {e_proc}", flush=True)
 
