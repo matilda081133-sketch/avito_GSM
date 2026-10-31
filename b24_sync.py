@@ -72,7 +72,8 @@ PROJECT_ID_TO_FACILITY = {
     "3086": "Арника",
     "3094": "Ароматный мир",
     "3096": "ДНС",
-    "3098": "Смарт Family вахта"
+    "3098": "Смарт Family вахта",
+    "3124": "Альфатехформ"
 }
 
 def get_project_enum_id(facility_name: str, vacancy: str = "") -> str:
@@ -82,6 +83,8 @@ def get_project_enum_id(facility_name: str, vacancy: str = "") -> str:
     comb = f"{facility_name or ''} {vacancy or ''}".lower()
     if any(w in comb for w in ["9268686", "новосистем", "служебн", "техподдержк"]):
         return ""
+    if any(w in comb for w in ["альфатехформ", "альфатех", "климовск", "колбочк", "флакон", "alfa_new"]):
+        return "3124" # Альфатехформ
     if any(w in comb for w in ["запчаст", "китайск", "автозапчаст"]) or ("подольск" in comb and "коробок" in comb):
         return "2966" # Склад Китайских Автозапчастей
     elif any(w in comb for w in ["зоо", "смарт", "балаших", "салтыков", "кучин", "новомилет"]):
@@ -191,8 +194,6 @@ def extract_facility_name(text: str = "", comments: str = "", vacancy_title: str
 
     if any(w in combined for w in ["клининг", "уборщик", "уборщиц", "уборк", "поломоечн"]):
         return "Клининг"
-    if "вахт" in combined:
-        return "СДС Химки"
 
     # 8. Проверяем системный проект Б24
     if str(proj_id) in PROJECT_ID_TO_FACILITY:
@@ -220,9 +221,11 @@ def parse_and_enhance_deal(deal: dict) -> dict:
     vac_url = deal.get("UF_CRM_1768819383825") or ""
     proj_id = str(deal.get("UF_CRM_1768815865773") or "")
 
-    # Защита от ложного "Аби": если в raw_obj стоит "Аби", но в вакансии или url совсем другое — игнорируем
+    # Защита от ложного "Аби" и ложного "СДС Химки": если в raw_obj стоит дефолт, но в вакансии совсем другое — игнорируем
     comb_check = f"{vac_title} {vac_url} {comments}".lower()
     if raw_obj in ["Аби", "АБИ Владимир"] and not any(w in comb_check for w in ["аби", "владимир", "мясо", "колбас"]):
+        raw_obj = ""
+    if raw_obj == "СДС Химки" and not any(w in comb_check for w in ["сдс", "химки", "брехов", "брёхов", "электротовар"]):
         raw_obj = ""
 
     m_title = re.search(r'\[Наименование:\]\s*([^\n\r\[]+)', comments)

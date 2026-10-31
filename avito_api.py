@@ -146,6 +146,76 @@ class AvitoClient:
             return False
 
     _cached_chat_titles = {}
+    _cached_item_details = {}
+    _cache_file_items = os.path.join(os.path.dirname(__file__), "avito_items_cache.json")
+
+    def _load_items_cache(self) -> dict:
+        if not self._cached_item_details and os.path.exists(self._cache_file_items):
+            try:
+                with open(self._cache_file_items, "r", encoding="utf-8") as f:
+                    self._cached_item_details = json.load(f)
+            except Exception:
+                self._cached_item_details = {}
+        return self._cached_item_details
+
+    def _save_items_cache(self):
+        try:
+            with open(self._cache_file_items, "w", encoding="utf-8") as f:
+                json.dump(self._cached_item_details, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+
+    def get_item_details(self, item_id: str) -> dict:
+        """
+        Получает и кэширует полные данные объявления Авито по item_id:
+        - autoload_item_id (Код вакансии из автозагрузки, например ALFA_NEW_0040)
+        - description (Полный текст описания вакансии)
+        - address (Адрес из объявления)
+        """
+        if not item_id:
+            return {}
+        item_id = str(item_id).strip()
+        cache = self._load_items_cache()
+        if item_id in cache and cache[item_id].get("description"):
+            return cache[item_id]
+
+        info = cache.get(item_id, {"autoload_item_id": "", "description": "", "address": "", "url": ""})
+        try:
+            token = self.get_token()
+            headers = {"Authorization": f"Bearer {token}"}
+            # 1. Получаем код вакансии (autoload_item_id) через Core API
+            r_core = self._request_with_retry(
+                "GET",
+                f"https://api.avito.ru/core/v1/accounts/{self.user_id}/items/{item_id}/",
+                headers=headers,
+                timeout=8
+            )
+            if r_core.status_code == 200:
+                c_data = r_core.json()
+                info["autoload_item_id"] = c_data.get("autoload_item_id") or info.get("autoload_item_id", "")
+                info["url"] = c_data.get("url") or info.get("url", "")
+
+            # 2. Получаем полное описание и адрес вакансии через Job API v2
+            r_job = self._request_with_retry(
+                "GET",
+                f"https://api.avito.ru/job/v2/vacancies/{item_id}",
+                headers=headers,
+                timeout=8
+            )
+            if r_job.status_code == 200:
+                j_data = r_job.json()
+                info["description"] = j_data.get("description") or info.get("description", "")
+                addr = j_data.get("addressDetails", {}).get("address") or ""
+                info["address"] = addr or info.get("address", "")
+                if not info.get("autoload_item_id") and j_data.get("custom_employer_name"):
+                    info["custom_employer_name"] = j_data.get("custom_employer_name")
+
+            cache[item_id] = info
+            self._save_items_cache()
+        except Exception as e:
+            print(f"[AvitoClient] get_item_details({item_id}) error: {e}")
+
+        return info
 
     def get_chat_context_title(self, chat_id: str) -> str:
         """Получает точное название объявления Авито, на которое пришел отклик (из контекста чата)."""

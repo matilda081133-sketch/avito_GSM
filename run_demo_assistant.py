@@ -310,27 +310,78 @@ FACILITIES = {
             "• Мужчины от 20 до 50 лет, паспорт РФ, без опыта.\n\n"
             "Подскажите, сколько вам полных лет и из какого города планируете приехать?"
         )
+    },
+    "ALFATECH": {
+        "title": "Производство пластиковой продукции Альфатехформ (МО, г. Подольск, мкр. Климовск)",
+        "facility_name": "Альфатехформ",
+        "project_enum": "3124",
+        "tag": "alfa",
+        "duties": (
+            "Визуальный осмотр пластиковых изделий (колбочки и флаконы) на производственной линии, "
+            "отбор дефектных изделий и аккуратная фасовка готовой продукции в картонные короба, "
+            "запечатывание коробов скотчем и укладка на паллет. Работа чистая, спокойная, на современном теплом предприятии!"
+        ),
+        "shift_text": (
+            "Срок вахты — 35 смен (с возможностью продления). График 6/1 или 7/0, только ДНЕВНЫЕ смены с 09:00 до 21:00 (ночных смен нет!)."
+        ),
+        "housing": (
+            "Бесплатный чистый хостел прямо возле производства (г. Подольск, мкр. Климовск, проспект 50 лет Октября, 21А) — "
+            "до работы ровно 5 минут пешком! Свежий ремонт, Wi-Fi, в комнате холодильник, стол, шкафы, оборудованная кухня, душевые и стиральные машины."
+        ),
+        "schedule": (
+            "Только ДНЕВНЫЕ смены: с 09:00 до 21:00 (11 рабочих часов, ночных смен нет!). График 6/1 или 7/0."
+        ),
+        "pay": (
+            "Фиксированная ставка: 3 700 ₽ за смену (129 500 ₽ за вахту 35 смен чистыми на руки). "
+            "Еженедельные авансы от 3 000 до 5 000 ₽ на карту любого банка, полный расчет сразу по окончании вахты без задержек."
+        ),
+        "food": (
+            "Бесплатное горячее 2-разовое питание на смене."
+        ),
+        "transport": (
+            "Заселение в день приезда сразу в хостел в Климовске (проспект 50 лет Октября, 21А), до завода 5 минут пешком."
+        ),
+        "medbook": (
+            "Медкнижка не требуется!"
+        ),
+        "intro": (
+            "{greeting}\n\n"
+            "Вахта в г. Подольск (мкр. Климовск) на чистое современное производство пластиковой продукции (колбочки и флаконы) «Альфатехформ».\n\n"
+            "• Фиксированная ставка: 3 700 ₽ за смену (129 500 ₽ за вахту 35 смен чистыми на руки);\n"
+            "• Только ДНЕВНЫЕ смены с 09:00 до 21:00 (ночных смен нет!);\n"
+            "• Бесплатное горячее 2-разовое питание на смене;\n"
+            "• Бесплатный чистый хостел в 5 минутах пешком от производства (пр-т 50 лет Октября, 21А);\n"
+            "• Еженедельные авансы от 3 000 до 5 000 ₽ на карту любого банка;\n"
+            "• Принимаем мужчин и женщин от 19 до 55 лет, паспорт РФ, без опыта.\n\n"
+            "Подскажите, пожалуйста, сколько вам полных лет и из какого города планируете приехать?"
+        )
     }
 }
-def detect_facility(text: str) -> str:
-    t = (text or "").lower()
+def detect_facility(text: str, vacancy_code: str = "", description: str = "") -> str:
+    code_up = (vacancy_code or "").upper()
+    desc_low = (description or "").lower()
+    t = f"{code_up.lower()} {text or ''} {desc_low}".lower()
+
+    # 0. Проверка по коду вакансии (autoload_item_id) и описанию Альфатехформ (Климовск, колбочки и флаконы)
+    if "ALFA_NEW" in code_up or "ALFATECH" in code_up or any(k in t for k in ["альфатехформ", "альфатех", "климовск", "колбочк", "флакон", "50 лет октября", "пластиковой продукции"]):
+        return "ALFATECH"
     
     # 1. Зоотовары (Балашиха / Салтыковка / Кучино)
-    if any(k in t for k in ["зоо", "зоотовар", "животн", "смарт", "балаших", "салтыков", "кучин"]):
+    if "SMART" in code_up or any(k in t for k in ["зоо", "зоотовар", "животн", "смарт", "балаших", "салтыков", "кучин", "petshop"]):
         if any(k in t for k in ["вахт", "проживан", "общежит"]):
             return "SMART_VAHTA"
         return "SMART_LOCAL"
 
     # 2. Тепофол Кашира (утеплитель, изоляция, рулоны)
-    if any(k in t for k in ["тепофол", "кашир", "утеплит", "изоляци", "рулон", "полиэтилен"]):
+    if "TEPOFOL" in code_up or "KASHIR" in code_up or any(k in t for k in ["тепофол", "кашир", "утеплит", "изоляци", "рулон", "полиэтилен"]):
         return "TEPOFOL"
 
     # 3. Автозапчасти (Подольск)
-    if any(k in t for k in ["автозапчаст", "запчаст", "китайск", "подольск"]):
+    if any(k in t for k in ["автозапчаст", "запчаст", "китайск"]) or ("подольск" in t and "климовск" not in t):
         return "ALFA"
 
     # 4. Пищевое производство / Мясокомбинат АБИ (Владимир, колбаса, сосиски, Вязанка)
-    if any(k in t for k in ["пищев", "мясо", "колбас", "колбасн", "сосиск", "аби", "владимир", "вязанк", "стародвор", "3-разов", "3 раза"]):
+    if "ABI" in code_up or "VLAD" in code_up or any(k in t for k in ["пищев", "мясо", "колбас", "колбасн", "сосиск", "аби", "владимир", "вязанк", "стародвор", "3-разов", "3 раза"]):
         return "ABI"
 
     # Если в вакансии написано "вахта", но объект не уточнен — по умолчанию АБИ Владимир
@@ -344,7 +395,9 @@ FACILITY_TAGS = {
     "ABI": "abi",
     "TEPOFOL": "tepofol",
     "SMART_LOCAL": "smart",
-    "ALFA": "alfa"
+    "SMART_VAHTA": "smart",
+    "ALFA": "alfa",
+    "ALFATECH": "alfa"
 }
 
 def get_max_bot_link(facility_key: str = "ABI", deal_id: str = "") -> str:
@@ -362,7 +415,7 @@ def find_b24_deal_for_chat(chat_id: str):
         from b24_sync import call_b24
         deals = call_b24('crm.deal.list', {
             'filter': {'%UF_CRM_1770280572875': chat_id},
-            'select': ['ID', 'TITLE', 'STAGE_ID', 'CATEGORY_ID', 'ASSIGNED_BY_ID', 'UF_CRM_1775470003043'],
+            'select': ['ID', 'TITLE', 'STAGE_ID', 'CATEGORY_ID', 'ASSIGNED_BY_ID', 'COMMENTS', 'UF_CRM_1775470003043', 'UF_CRM_1768815865773', 'UF_CRM_1768817930019', 'UF_CRM_1768819383825'],
             'order': {'ID': 'DESC'}
         }).get('result', [])
         if deals:
@@ -485,7 +538,7 @@ def extract_ready_date(text: str) -> str:
             return w
     return ""
 
-def generate_human_reply(cand_text: str, ad_title: str, cand_history_only: str = "", our_history: str = "", deal_id: str = "", deal_stage: str = "", cand_name: str = "", dialogue_transcript: str = "", profile: dict = None) -> tuple:
+def generate_human_reply(cand_text: str, ad_title: str, cand_history_only: str = "", our_history: str = "", deal_id: str = "", deal_stage: str = "", cand_name: str = "", dialogue_transcript: str = "", profile: dict = None, vacancy_code: str = "", ad_description: str = "") -> tuple:
     """
     Интеллектуальный генератор диалога: гибкий, эмпатичный, контекстно-зависимый.
     Понимает подбор для третьих лиц (муж, сын, брат), исправляет неточности,
@@ -493,7 +546,7 @@ def generate_human_reply(cand_text: str, ad_title: str, cand_history_only: str =
     """
     t = cand_text.lower().strip()
     combined_cand = (cand_history_only + " \n " + cand_text).strip().lower()
-    fac_key = detect_facility(ad_title + " " + combined_cand)
+    fac_key = detect_facility(ad_title + " " + combined_cand, vacancy_code=vacancy_code, description=ad_description)
     fac = FACILITIES.get(fac_key, FACILITIES["ABI"])
 
     # Имя собеседника для персонального вежливого обращения
@@ -1124,13 +1177,23 @@ def process_valeria_chat(chat_id: str, cand_name: str, item_title: str, msgs: li
     deal = find_b24_deal_for_chat(chat_id)
     deal_id = str(deal.get("ID", "")) if deal else ""
     deal_stage = str(deal.get("STAGE_ID", "")) if deal else ""
+    deal_comments = str(deal.get("COMMENTS", "")) if deal else ""
+
+    # Получаем код вакансии (autoload_item_id) и полное описание объявления из API Авито + из сделки Битрикс24
+    item_details = client.get_item_details(item_id) if item_id else {}
+    vacancy_code = item_details.get("autoload_item_id", "")
+    if not vacancy_code and deal_comments:
+        m_code = re.search(r'\[B\]Код вакансии:\[/B\]\s*([^\n\r\[]+)', deal_comments)
+        if m_code:
+            vacancy_code = m_code.group(1).strip()
+    ad_description = f"{item_details.get('description', '')} {item_details.get('address', '')} {deal_comments}"
 
     # Проактивная отправка ссылки в МАКС, если рекрутер уже созвонился и перевел сделку в запрос паспорта/направление
     if last_msg.get('author_id') == AVITO_USER_ID:
         if deal_stage in ['UC_REQ_PASSPORT', 'UC_ITCFIF', 'PREPAYMENT_INVOICE']:
             has_max_sent = any("max.ru" in m.get('content', {}).get('text', '') for m in msgs[-5:] if m.get('author_id') == AVITO_USER_ID)
             if not has_max_sent:
-                fac_key = detect_facility(item_title)
+                fac_key = detect_facility(item_title, vacancy_code=vacancy_code, description=ad_description)
                 proactive_text = generate_max_invite_reply(fac_key, deal_id, cand_name=cand_name or "Валерия", already_sent=False)
                 print(f"\n[{datetime.datetime.now().strftime('%H:%M:%S')}] 🚀 ПРОАКТИВНАЯ ОТПРАВКА ССЫЛКИ В МАКС (стадия CRM: {deal_stage}):")
                 print(proactive_text)
@@ -1232,11 +1295,13 @@ def process_valeria_chat(chat_id: str, cand_name: str, item_title: str, msgs: li
         deal_stage=deal_stage,
         cand_name=cand_name,
         dialogue_transcript=full_transcript,
-        profile=profile
+        profile=profile,
+        vacancy_code=vacancy_code,
+        ad_description=ad_description
     )
 
     if is_explicit_restart and not reply_text.startswith("Здравствуйте"):
-        fac_key = detect_facility(item_title)
+        fac_key = detect_facility(item_title, vacancy_code=vacancy_code, description=ad_description)
         intro_card = FACILITIES.get(fac_key, FACILITIES["ABI"])["intro"]
         name_greet = f"{cand_first_name}, " if cand_first_name else ""
         reply_text = f"{name_greet}договорились, начинаем с чистого листа!\n\n{intro_card}"
@@ -1249,7 +1314,7 @@ def process_valeria_chat(chat_id: str, cand_name: str, item_title: str, msgs: li
 
     # Параметры извлекаем СТРОГО из текста активной сессии кандидата!
     all_cand_texts = " \n ".join(cand_msgs)
-    fac_key = detect_facility(item_title + " " + all_cand_texts)
+    fac_key = detect_facility(item_title + " " + all_cand_texts, vacancy_code=vacancy_code, description=ad_description)
     fac_info = FACILITIES.get(fac_key, FACILITIES["ABI"])
     facility_name = fac_info["facility_name"]
 
