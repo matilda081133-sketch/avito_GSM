@@ -102,7 +102,7 @@ def healthcheck(request: Request):
     return {
         "status": "online",
         "service": "Avito + MAX Cloud AI Recruiter (GSM Logistics) 24/7",
-        "version": "2.7.2",
+        "version": "2.8.1",
         "threads": {
             "avito_alive": avito_alive,
             "max_alive": max_alive,

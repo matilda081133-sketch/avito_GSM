@@ -717,6 +717,16 @@ def handle_single_update(up: dict):
         text = (body.get("text") or "").strip()
         attachments = body.get("attachments", [])
 
+        # ЗАЩИТА ОТ ИСТОРИЧЕСКИХ СООБЩЕНИЙ ПРИ ПЕРЕЗАПУСКЕ / ДЕПЛОЕ КОНТЕЙНЕРА:
+        # Если сообщение старше 90 секунд — никогда не отвечаем на него повторно!
+        raw_ts = msg.get("timestamp") or up.get("timestamp") or 0
+        if raw_ts:
+            ts_sec = raw_ts / 1000.0 if raw_ts > 1e11 else float(raw_ts)
+            age_sec = time.time() - ts_sec
+            if age_sec > 90:
+                print(f"🛑 [STALE UPDATE] Пропуск старого сообщения {mid} (возраст {int(age_sec)} сек > 90 сек).", flush=True)
+                return
+
         # АТОМАРНАЯ ЗАЩИТА ОТ ДУБЛИКАТОВ ПО УНИКАЛЬНОМУ MID В SQLITE
         if mid:
             try:
@@ -887,6 +897,19 @@ def bot_worker_loop():
     marker = int(marker_str) if marker_str and marker_str.isdigit() else None
     if marker:
         print(f"[MAX BOT ENGINE] Восстановлен маркер из SQLite: {marker}", flush=True)
+    else:
+        # При чистом старте нового контейнера после деплоя проматываем старую очередь без отправки ответов!
+        try:
+            init_req = urllib.request.Request(f"{MAX_API_BASE}/updates?timeout=1", headers={"Authorization": TOKEN})
+            with urllib.request.urlopen(init_req, timeout=10, context=ctx) as r_init:
+                init_data = json.loads(r_init.read().decode('utf-8'))
+            init_marker = init_data.get("marker")
+            if init_marker:
+                marker = init_marker
+                set_meta("last_marker", marker)
+                print(f"[MAX BOT ENGINE] Чистый старт после деплоя: промотана старая очередь (установлен маркер {marker}).", flush=True)
+        except Exception as e_init:
+            print(f"[MAX BOT INIT MARKER WARN]: {e_init}", flush=True)
 
     while True:
         try:
