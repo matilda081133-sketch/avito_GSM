@@ -864,8 +864,10 @@ def generate_human_reply(cand_text: str, ad_title: str, cand_history_only: str =
         has_tk_q = any(k in combined_cand for k in ["по тк", "тк рф", "оформлен", "трудов", "договор", "гпх"])
         has_duties_q = any(k in combined_cand for k in ["что грузить", "что делать", "обязанност", "тяжести"])
 
-        parts = [f"{name_prefix}прошу прощения, пропустила ваш вопрос! Отвечаю подробно:"]
-        if has_tk_q or ("оформлен" in t or "тк" in t or "гпх" in t):
+        parts = [f"{name_prefix}прошу прощения за недопонимание, обязательно отвечаю на ваш вопрос:"]
+        if "помо" in t or "откры" in t:
+            parts.append("• Конечно, мы полностью поможем открыть и оформить самозанятость прямо с телефона — координатор во всём подскажет шаг за шагом!")
+        elif has_tk_q or ("оформлен" in t or "тк" in t or "гпх" in t):
             parts.append(
                 "• Оформление официальное с первого дня через самозанятость: налог 6% полностью компенсирует компания (со своего кармана ничего не платите, ставку получаете чистыми на руки!). Все прозрачно и официально по закону."
             )
@@ -877,6 +879,10 @@ def generate_human_reply(cand_text: str, ad_title: str, cand_history_only: str =
         followup = get_qual_followup()
         parts.append(followup)
         return "\n\n".join(parts), False, ""
+
+    # Вопрос: поможете ли оформить / открыть самозанятость
+    if any(k in t for k in ["поможете оформить", "поможете открыть", "помочь оформить", "помочь открыть", "поможете с самозан", "поможете сделать", "открыть поможете"]):
+        return f"{name_prefix}да, конечно! Наш координатор лично поможет всё открыть и настроить прямо с телефона (через Сбербанк Онлайн или приложение «Мой налог») — это делается буквально за 2 минуты, во всём пошагово подскажем и сопроводим! Налог 6% компания полностью компенсирует сверху ставки, чистыми получаете 100% заработанных денег на руки.\n\nПаспорт гражданина РФ у него на руках?", False, ""
 
     # Б. Вопрос по ГПХ
     if "гпх" in t:
@@ -1279,7 +1285,8 @@ def process_valeria_chat(chat_id: str, cand_name: str, item_title: str, msgs: li
     our_history = " \n ".join(our_msgs)
 
     transcript_lines = []
-    for m in active_msgs:
+    # Используем скользящее окно последних 8 сообщений, чтобы не перегружать контекст и отвечать за 2-3 секунды
+    for m in active_msgs[-8:]:
         auth = 'Ассистент' if m.get('author_id') == AVITO_USER_ID else (cand_name or 'Кандидат')
         txt_m = m.get('content', {}).get('text', '').strip()
         if txt_m:

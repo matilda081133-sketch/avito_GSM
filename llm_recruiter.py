@@ -163,7 +163,7 @@ def generate_llm_reply(
             "generationConfig": gen_cfg
         }
         try:
-            resp = requests.post(url, json=payload, timeout=8)
+            resp = requests.post(url, json=payload, timeout=18)
             if resp.status_code == 200:
                 data = resp.json()
                 candidates = data.get("candidates", [])
