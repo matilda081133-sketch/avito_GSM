@@ -314,8 +314,7 @@ def create_call_task(responsible_id: int, deal_id: int, title: str, description:
         'UF_CRM_TASK': [f'D_{deal_id}']
     }
     # res = b24_sync.call_b24('tasks.task.add', {'fields': task_fields})
-    res = {'result': None} # Задачи менеджерам полностью отключены
-    return res.get('result', {}).get('task', {}).get('id')
+    return None # Задачи менеджерам полностью отключены
 
 # =============================================================================
 # 1. ОБРАБОТКА ДИАЛОГОВ В ЛИЧКЕ С КАНДИДАТОМ
