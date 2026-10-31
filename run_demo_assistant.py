@@ -460,20 +460,52 @@ def extract_phone_number(text: str) -> str:
 def extract_age(text: str) -> int:
     if not text:
         return 0
-    t = text.lower()
-    # Ищем все совпадения и берем ПОСЛЕДНЕЕ актуальное указание возраста (справа налево)
-    matches_kw = re.findall(r'\b(?:брату|мужу|сыну|мне|ему|возраст)?\s*(\d{1,2})\s*(?:лет|год|года|л\b)', t)
+    t = text.lower().replace('\u00a0', ' ')
+
+    # Игнорируем резюме и системные сообщения
+    if '[системное сообщение]' in t or 'резюме' in t:
+        # В тексте резюме возраст извлекаем только если прямо написано 'X лет/года'
+        m_res = re.search(r'\b(\d{1,2})\s*(?:лет|год|года)\b', t)
+        if m_res:
+            val = int(m_res.group(1))
+            if 16 <= val <= 75:
+                return val
+        return 0
+
+    # Очищаем текст от зарплат, денег, смен, дней, часов и минут перед анализом
+    cleaned = re.sub(r'\b\d+[\s]*(?:000|тыс|руб|р\b|₽)', ' ', t)
+    cleaned = re.sub(r'\b\d+[\s]*(?:смен[а-я]*|дне[йя]|день|часов|часа|час|мин[а-я]*)', ' ', cleaned)
+    cleaned = re.sub(r'\b\d{1,2}[.:]\d{1,2}\b', ' ', cleaned) # время
+
+    # 1. Приоритетный поиск: возраст с ключевыми словами (мне 25, брату 33, 47 лет, возраст 50)
+    matches_kw = re.findall(r'\b(?:брату|мужу|сыну|мне|ему|ей|возраст)\s*(\d{1,2})\b', cleaned)
     if matches_kw:
         for m in reversed(matches_kw):
             val = int(m)
             if 14 <= val <= 75:
                 return val
-    matches_num = re.findall(r'\b(1[4-9]|[2-6]\d)\b', t)
-    if matches_num:
-        for m in reversed(matches_num):
+
+    matches_units = re.findall(r'\b(\d{1,2})\s*(?:лет|год|года|л\b)', cleaned)
+    if matches_units:
+        for m in reversed(matches_units):
             val = int(m)
             if 14 <= val <= 75:
                 return val
+
+    # 2. Если сообщение короткое (например '33', '25', '38 рф', '35 лет'), число на старте
+    m_short = re.search(r'^\s*(\d{1,2})\b', cleaned.strip())
+    if m_short:
+        val = int(m_short.group(1))
+        if 16 <= val <= 75:
+            return val
+
+    # 3. Число перед запятой или после точки
+    m_sep = re.search(r'\b(\d{1,2})\s*[,.]', cleaned)
+    if m_sep:
+        val = int(m_sep.group(1))
+        if 16 <= val <= 75:
+            return val
+
     return 0
 
 def extract_citizenship(text: str) -> str:
@@ -914,9 +946,15 @@ def generate_human_reply(cand_text: str, ad_title: str, cand_history_only: str =
         followup = get_qual_followup()
         return f"{ans}\n\n{followup}", False, ""
 
-    # Е. Вопрос про проживание / где жить / общежитие / условия / квартиры / быт
+    # Е. Вопрос про проживание: кандидат НЕ хочет жить в квартире / есть свое жилье
+    if any(k in t for k in ["без проживан", "не нужно проживан", "проживание не нужно", "не надо с проживан", "не надо проживан", "без жилья", "жилье не надо", "жилье есть", "местные", "местный", "живу рядом", "сами снимем", "свое жилье"]):
+        ans = f"{name_prefix}если вы живете рядом и проживание вам не требуется — конечно, это абсолютно не проблема, можно работать без проживания! На смене у нас также предоставляется бесплатное горячее питание."
+        followup = get_qual_followup()
+        return f"{ans}\n\n{followup}", False, ""
+
+    # Вопрос про условия проживания (где жить, комнаты, квартиры, быт)
     if any(k in t for k in ["жить", "жиль", "проживан", "хостел", "общежит", "комнат", "квартир", "где селят", "заселен", "душев", "стирал", "постельн", "вайфай", "wifi", "стирк", "холодильник", "кухн", "душ", "санузел", "горячая вод", "по сколько человек", "сколько человек в комнат"]):
-        ans = f"{name_prefix}{fac.get('housing', 'Проживание бесплатное в комфортном корпоративных квартирах со всеми удобствами.')}"
+        ans = f"{name_prefix}{fac.get('housing', 'Проживание бесплатное в комфортных корпоративных квартирах со всеми удобствами.')}"
         followup = get_qual_followup()
         return f"{ans}\n\n{followup}", False, ""
 

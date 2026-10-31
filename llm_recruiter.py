@@ -137,6 +137,9 @@ def generate_llm_reply(
     full_system_prompt = f"{SYSTEM_PROMPT}\n\nДОПОЛНИТЕЛЬНЫЕ ПРАВИЛА ИЗ БАЗЫ ЗНАНИЙ:\n{learned_rules_text}"
 
     models_to_try = [
+        "gemini-3-flash-preview",
+        "gemini-3.5-flash-lite",
+        "gemini-3.8-flash",
         "gemini-3.1-flash-lite",
         "gemini-3.1-flash-lite-preview",
         "gemini-flash-latest"
@@ -144,47 +147,52 @@ def generate_llm_reply(
 
     for m in models_to_try:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent?key={api_key}"
-        gen_cfg = {
-            "temperature": 0.7,
-            "maxOutputTokens": 350
-        }
-        # Reliable standard config without unsupported thinking arguments
+        # We try zero thinking budget first so response comes back in < 1s without burning output tokens on internal CoT
+        configs_to_try = [
+            {"temperature": 0.7, "maxOutputTokens": 600, "thinkingConfig": {"thinkingBudget": 0}},
+            {"temperature": 0.7, "maxOutputTokens": 600}
+        ]
 
-        payload = {
-            "system_instruction": {
-                "parts": [{"text": full_system_prompt}]
-            },
-            "contents": [
-                {
-                    "role": "user",
-                    "parts": [{"text": user_prompt}]
-                }
-            ],
-            "generationConfig": gen_cfg
-        }
-        try:
-            resp = requests.post(url, json=payload, timeout=18)
-            if resp.status_code == 200:
-                data = resp.json()
-                candidates = data.get("candidates", [])
-                if candidates:
-                    parts = candidates[0].get("content", {}).get("parts", [])
-                    if parts and "text" in parts[0]:
-                        reply = parts[0]["text"].strip()
-                        # Safety filter
-                        if "фото паспорта" in reply.lower() and ("пришлите" in reply.lower() or "скиньте" in reply.lower()):
-                            reply = reply.replace("фото паспорта", "подтверждение гражданства РФ")
-                        if len(reply) > 450:
-                            dot_idx = reply[:450].rfind(".")
-                            if dot_idx > 100:
-                                reply = reply[:dot_idx + 1]
-                            else:
-                                reply = reply[:450]
-                        return reply
-            else:
-                logger.warning(f"Model {m} returned {resp.status_code}: {resp.text[:100]}")
-        except Exception as e:
-            logger.warning(f"Model {m} request failed: {e}")
-            continue
+        for gen_cfg in configs_to_try:
+            payload = {
+                "system_instruction": {
+                    "parts": [{"text": full_system_prompt}]
+                },
+                "contents": [
+                    {
+                        "role": "user",
+                        "parts": [{"text": user_prompt}]
+                    }
+                ],
+                "generationConfig": gen_cfg
+            }
+            try:
+                resp = requests.post(url, json=payload, timeout=18)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    candidates = data.get("candidates", [])
+                    if candidates:
+                        parts = candidates[0].get("content", {}).get("parts", [])
+                        if parts and "text" in parts[0]:
+                            reply = parts[0]["text"].strip()
+                            # Safety filter
+                            if "фото паспорта" in reply.lower() and ("пришлите" in reply.lower() or "скиньте" in reply.lower()):
+                                reply = reply.replace("фото паспорта", "подтверждение гражданства РФ")
+                            if len(reply) > 550:
+                                dot_idx = reply[:550].rfind(".")
+                                if dot_idx > 100:
+                                    reply = reply[:dot_idx + 1]
+                                else:
+                                    reply = reply[:550]
+                            return reply
+                elif resp.status_code == 400 and "thinkingConfig" in gen_cfg:
+                    # Model might not support thinkingConfig, fall through to retry without it
+                    continue
+                else:
+                    logger.warning(f"Model {m} returned {resp.status_code}: {resp.text[:100]}")
+                    break
+            except Exception as e:
+                logger.warning(f"Model {m} request failed: {e}")
+                break
 
     return None

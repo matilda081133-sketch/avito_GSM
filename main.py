@@ -139,24 +139,63 @@ def test_gemini_endpoint():
         "has_api_key": bool(api_key),
         "key_len": len(api_key) if api_key else 0,
         "key_prefix": api_key[:6] if api_key else "",
+        "available_models": [],
         "attempts": []
     }
-    models = ["gemini-2.5-flash-lite", "gemini-flash-latest", "gemini-3.1-flash-lite", "gemini-3.5-flash-lite", "gemini-2.5-flash"]
-    for m in models:
+    try:
+        r_models = requests.get(f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}", timeout=8)
+        if r_models.status_code == 200:
+            m_list = r_models.json().get("models", [])
+            diag["available_models"] = [
+                m.get("name", "").replace("models/", "")
+                for m in m_list
+                if "generateContent" in m.get("supportedGenerationMethods", [])
+            ]
+        else:
+            diag["models_fetch_error"] = f"{r_models.status_code}: {r_models.text[:150]}"
+    except Exception as e:
+        diag["models_fetch_error"] = str(e)
+
+    test_models = [
+        "gemini-3-flash-preview",
+        "gemini-3.5-flash-lite",
+        "gemini-3.8-flash",
+        "gemini-3.1-flash-lite",
+        "gemini-flash-latest"
+    ]
+    for am in diag.get("available_models", []):
+        if ("flash" in am or "3" in am) and am not in test_models:
+            test_models.append(am)
+
+    for m in test_models:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent?key={api_key}"
+        cfg = {
+            "temperature": 0.7,
+            "maxOutputTokens": 600,
+            "thinkingConfig": {"thinkingBudget": 0}
+        }
+        payload = {
+            "contents": [{"parts": [{"text": "Ответь одним словом: Работает"}]}],
+            "generationConfig": cfg
+        }
+        t0 = time.time()
         try:
-            r = requests.post(url, json={"contents": [{"parts": [{"text": "Ответь одним словом: Работает"}]}]}, timeout=5)
+            r = requests.post(url, json=payload, timeout=12)
+            latency = round(time.time() - t0, 2)
             diag["attempts"].append({
                 "model": m,
                 "status": r.status_code,
+                "latency_sec": latency,
                 "resp": r.text[:200]
             })
             if r.status_code == 200:
                 diag["working_model"] = m
                 break
         except Exception as e:
+            latency = round(time.time() - t0, 2)
             diag["attempts"].append({
                 "model": m,
+                "latency_sec": latency,
                 "error": str(e)
             })
     return diag
