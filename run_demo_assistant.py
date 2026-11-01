@@ -502,6 +502,59 @@ def check_is_ready_to_sign_up(text: str) -> bool:
             return True
     return False
 
+NON_RUSSIAN_NAME_ROOTS = {
+    "мухаммад", "магомед", "мухаммаджон", "ахмед", "ахмад", "расул", "азиз", "азизбек", "бахром",
+    "шерзод", "дилшод", "фарход", "отабек", "сардор", "джамшед", "фируз", "исмоил", "давлат",
+    "хуршед", "сухроб", "алишер", "бахтияр", "нурсултан", "умар", "али", "хасан", "хусейн",
+    "рустам", "шахзод", "акмал", "илхом", "жасур", "бобур", "элдор", "камрон", "мирзо",
+    "шохрух", "абдулло", "абдулла", "исмаил", "ибрагим", "сулейман", "мурат", "мурад", "зафар",
+    "комрон", "шариф", "нодир", "собир", "улугбек", "гулнора", "зарина", "нигора", "мадина",
+    "шахноза", "зульфия", "фатима", "лейла", "амина", "гульшат", "наргиза", "рахим", "карим",
+    "мамед", "орхан", "эльмир", "эльмира", "айдамир", "аслан", "беслан", "шамиль", "хабиб",
+    "муслим", "муса", "иса", "мехродж", "шокир", "зокир", "холик", "акрам", "хайдар",
+    "тохир", "содик", "умид", "жахонгир", "саид", "далер", "навруз", "сохиб", "хуршид",
+    "фаррух", "бехруз", "шухрат", "мансур", "анвар", "билол", "илдар", "ильдар", "рамиль",
+    "ренат", "ринат", "марат", "радик", "дамир", "артур", "эмиль", "надир", "самир", "камиль",
+    "тамерлан", "заур", "азамат", "батыр", "чингиз", "самат", "айдар", "булат", "алмаз"
+}
+
+NON_RUSSIAN_SUFFIXES = (
+    "бек", "джон", "жон", "кул", "хон", "хан", "заде", "зода", "оглы", "кызы", "угли",
+    "боев", "боева", "шоев", "шоева", "додов", "додова", "холов", "холова", "зоиров", "зоирова"
+)
+
+def is_non_russian_name(name: str = "", text: str = "") -> bool:
+    """Определяет нерусские, восточные, кавказские или среднеазиатские имена, требующие настороженности и проверки паспорта РФ."""
+    combined = ((name or "") + " " + (text or "")).lower()
+    words = re.findall(r'[а-яёa-z]+', combined)
+    for w in words:
+        if w in NON_RUSSIAN_NAME_ROOTS:
+            return True
+        if len(w) >= 5 and w.endswith(NON_RUSSIAN_SUFFIXES):
+            return True
+        if any(root in w for root in ["мухамм", "магомед", "абдул", "рахмон", "байрам", "курбан"]):
+            return True
+    return False
+
+def has_explicit_rf_confirmation(text: str) -> bool:
+    """Проверяет, есть ли прямое текстовое подтверждение гражданства РФ от кандидата."""
+    if not text:
+        return False
+    t = text.lower()
+    patterns = [
+        r'\b(?:да,?\s*)?(?:паспорт\s+)?рф\b',
+        r'\bграждан(?:ин|ка|ство)?\s+рф\b',
+        r'\bпаспорт\s+(?:гражданина\s+)?рф\b',
+        r'\bграждан(?:ин|ка|ство)?\s+росси[ия]\b',
+        r'\bпаспорт\s+росси[ия]\b',
+        r'\b(?:да,?\s*)?росси[яи]\b',
+        r'\b(?:русский|русская|россиянин|россиянка)\b'
+    ]
+    for p in patterns:
+        if re.search(p, t):
+            return True
+    return False
+
 def check_is_fully_qualified(profile: dict, combined_cand: str, fac_key: str = "ABI") -> bool:
     """
     Проверяет, что кандидат подходит под выдачу ПРЯМОЙ ссылки в чат-бот МАКС:
@@ -519,13 +572,20 @@ def check_is_fully_qualified(profile: dict, combined_cand: str, fac_key: str = "
         return False
 
     # 2. Гражданство: строго паспорт РФ
-    has_rf = profile.get("has_rf_passport")
-    if has_rf is False:
-        return False
-    if has_rf is None:
-        cit = extract_citizenship(combined_cand)
-        if cit != "РФ":
+    # Нерусские имена ДОЛЖНЫ НАСТОРАЖИВАТЬ — нужно ВСЕГДА иметь прямое подтверждение паспорта РФ!
+    cand_name = profile.get("candidate_name", "")
+    is_non_rus = is_non_russian_name(cand_name, combined_cand)
+    if is_non_rus:
+        if not has_explicit_rf_confirmation(combined_cand):
             return False
+    else:
+        has_rf = profile.get("has_rf_passport")
+        if has_rf is False:
+            return False
+        if has_rf is None:
+            cit = extract_citizenship(combined_cand)
+            if cit != "РФ":
+                return False
 
     # 3. Пол: АБИ Владимир и Альфа — сейчас СТРОГО мужчины! Тепофол — М/Ж
     target_subj = profile.get("target_subject", "кандидат")
@@ -684,6 +744,8 @@ def generate_human_reply(cand_text: str, ad_title: str, cand_history_only: str =
     fac_key = detect_facility(ad_title + " " + combined_cand, vacancy_code=vacancy_code, description=ad_description)
     fac = FACILITIES.get(fac_key, FACILITIES["ABI"])
     max_bot_link = get_max_bot_link(fac_key, deal_id)
+    is_non_rus = is_non_russian_name(cand_name, combined_cand)
+    has_rf_confirmed = has_explicit_rf_confirmation(combined_cand)
     ready_to_sign_up = check_is_ready_to_sign_up(cand_text)
     fully_qualified = check_is_fully_qualified(profile, combined_cand, fac_key)
 
@@ -715,7 +777,9 @@ def generate_human_reply(cand_text: str, ad_title: str, cand_history_only: str =
             profile=profile,
             max_bot_link=max_bot_link,
             is_ready_to_sign_up=ready_to_sign_up,
-            is_fully_qualified=fully_qualified
+            is_fully_qualified=fully_qualified,
+            is_non_russian=is_non_rus,
+            has_rf_confirmed=has_rf_confirmed
         )
         if llm_reply and len(llm_reply.strip()) > 5:
             is_disq = False
@@ -1023,7 +1087,9 @@ def generate_human_reply(cand_text: str, ad_title: str, cand_history_only: str =
             profile=profile,
             max_bot_link=max_bot_link,
             is_ready_to_sign_up=ready_to_sign_up,
-            is_fully_qualified=fully_qualified
+            is_fully_qualified=fully_qualified,
+            is_non_russian=is_non_rus,
+            has_rf_confirmed=has_rf_confirmed
         )
         if llm_reply:
             if our_history and llm_reply.strip().lower() in our_history.lower():
