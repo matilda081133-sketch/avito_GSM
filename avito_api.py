@@ -6,14 +6,15 @@ import json
 from config import AVITO_CLIENT_ID, AVITO_CLIENT_SECRET, AVITO_USER_ID
 
 class AvitoClient:
-    def __init__(self, client_id, client_secret, user_id):
+    def __init__(self, client_id, client_secret, user_id, cabinet_name=""):
         self.client_id = client_id
         self.client_secret = client_secret
         self.user_id = user_id
+        self.cabinet_name = cabinet_name
         self.access_token = None
         self.token_expires_at = 0
         self.session = requests.Session()
-        self.cache_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".avito_token_cache.json")
+        self.cache_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), f".avito_token_cache_{self.user_id}.json")
         self._load_cached_token()
 
     def _load_cached_token(self):

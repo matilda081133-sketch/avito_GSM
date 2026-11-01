@@ -27,7 +27,7 @@ if sys.stderr is not None:
     except Exception:
         pass
 
-from config import PORT, HOST, AVITO_CLIENT_ID, AVITO_CLIENT_SECRET, AVITO_USER_ID
+from config import PORT, HOST, AVITO_CLIENT_ID, AVITO_CLIENT_SECRET, AVITO_USER_ID, AVITO_CABINETS
 
 app = FastAPI(title="HR Cloud Autonomous Recruiter Service", version="2.8.2")
 
@@ -204,7 +204,7 @@ def test_gemini_endpoint():
 async def avito_webhook(request: Request):
     """
     Высокоскоростной входящий Webhook от Avito Messenger API V2.
-    Реакция на входящие сообщения соискателей за ~1-2 секунды (Kupibilet / Tinkoff standard).
+    Поддерживает все подключенные кабинеты компании (GSM Logistics).
     """
     try:
         data = await request.json()
@@ -217,19 +217,24 @@ async def avito_webhook(request: Request):
         if not chat_id or not text_content:
             return {"status": "ignored", "reason": "empty"}
 
-        # Игнорируем собственные сообщения
-        if author_id == AVITO_USER_ID:
+        known_cabinets = {c["id"]: c for c in AVITO_CABINETS}
+
+        # Игнорируем собственные сообщения любого из наших кабинетов
+        if author_id in known_cabinets or author_id == AVITO_USER_ID:
             return {"status": "ok", "reason": "self"}
 
-        print(f"[AVITO WEBHOOK] Входящее сообщение в чате {chat_id}: '{text_content[:60]}...'", flush=True)
+        target_cab = known_cabinets.get(user_id)
+        cab_name = target_cab["name"] if target_cab else "Кабинет"
+        print(f"[AVITO WEBHOOK] [{cab_name}] Входящее сообщение в чате {chat_id}: '{text_content[:60]}...'", flush=True)
 
         # Запускаем обработку в фоновом потоке, чтобы сразу вернуть HTTP 200 Авито
         def handle_async():
             try:
-                from run_demo_assistant import client, process_valeria_chat
-                chat_info = client.get_chat_messages(chat_id)
+                from run_demo_assistant import get_avito_client, process_valeria_chat
+                cab_client = get_avito_client(user_id)
+                chat_info = cab_client.get_chat_messages(chat_id)
                 # Получаем метаданные чата (title, item_id, url)
-                raw_chats = client.get_recent_chats(limit=30)
+                raw_chats = cab_client.get_recent_chats(limit=30)
                 c_item = next((c for c in raw_chats if c.get("id") == chat_id), {})
                 c_ctx = c_item.get("context", {}).get("value", {})
                 c_title = c_ctx.get("title", "")
@@ -237,12 +242,22 @@ async def avito_webhook(request: Request):
                 c_item_url = c_ctx.get("url", "")
                 c_user = "Кандидат"
                 for u in c_item.get("users", []):
-                    if u.get("id") != AVITO_USER_ID:
+                    if u.get("id") not in known_cabinets and u.get("id") != AVITO_USER_ID:
                         c_user = u.get("name", "Кандидат")
                         break
                 
                 msgs = list(reversed(chat_info))
-                process_valeria_chat(chat_id, c_user, c_title, msgs, item_id=c_item_id, item_url=c_item_url)
+                process_valeria_chat(
+                    chat_id, 
+                    c_user, 
+                    c_title, 
+                    msgs, 
+                    item_id=c_item_id, 
+                    item_url=c_item_url,
+                    avito_client=cab_client,
+                    current_user_id=user_id or cab_client.user_id,
+                    cabinet_name=cab_name
+                )
             except Exception as e_proc:
                 print(f"[AVITO WEBHOOK ERROR] Ошибка обработки: {e_proc}", flush=True)
 
@@ -279,8 +294,9 @@ async def max_webhook(request: Request):
         return {"status": "error", "message": str(e)}
 
 def run_avito_poller_thread():
-    """Фоновый поток дежурного рекрутера Авито с вечным авто-перезапуском при любом сбое."""
-    print("[CLOUD AVITO] Дежурный AI-рекрутер Авито запущен в облаке 24/7 (GSM Logistics).", flush=True)
+    """Фоновый поток дежурного рекрутера Авито для всех подключенных кабинетов 24/7."""
+    cabs_info = ", ".join([f"{c['name']} (ID: {c['id']})" for c in AVITO_CABINETS])
+    print(f"[CLOUD AVITO] Дежурный AI-рекрутер Авито запущен для {len(AVITO_CABINETS)} кабинетов: {cabs_info}.", flush=True)
     while True:
         try:
             from run_demo_assistant import check_and_reply_valeria
@@ -290,7 +306,7 @@ def run_avito_poller_thread():
                     poll_count += 1
                     check_and_reply_valeria()
                     if poll_count % 15 == 0:
-                        print(f"[CLOUD AVITO] Мониторинг чатов активен (проверок: {poll_count}).", flush=True)
+                        print(f"[CLOUD AVITO] Мониторинг всех {len(AVITO_CABINETS)} кабинетов активен (циклов: {poll_count}).", flush=True)
                     time.sleep(12)
                 except Exception as e:
                     print(f"[CLOUD AVITO POLLER ERROR] {e}", flush=True)

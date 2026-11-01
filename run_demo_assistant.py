@@ -19,13 +19,24 @@ if sys.stdout is not None:
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from avito_api import AvitoClient
-from config import AVITO_CLIENT_ID, AVITO_CLIENT_SECRET, AVITO_USER_ID
+from config import AVITO_CLIENT_ID, AVITO_CLIENT_SECRET, AVITO_USER_ID, AVITO_CABINETS
 from b24_sync import sync_candidate_to_b24_deal
 from llm_recruiter import generate_llm_reply
 from learning_system import match_learned_rule
 from session_memory import get_session_profile, update_session_profile, reset_session_profile
 
-client = AvitoClient(AVITO_CLIENT_ID, AVITO_CLIENT_SECRET, AVITO_USER_ID)
+client = AvitoClient(AVITO_CLIENT_ID, AVITO_CLIENT_SECRET, AVITO_USER_ID, cabinet_name="Прямой работодатель")
+
+# Инициализация клиентов для каждого подключенного кабинета
+CABINET_CLIENTS = {
+    cab["id"]: AvitoClient(cab["client_id"], cab["client_secret"], cab["id"], cabinet_name=cab["name"])
+    for cab in AVITO_CABINETS
+}
+
+def get_avito_client(user_id=None):
+    if user_id and user_id in CABINET_CLIENTS:
+        return CABINET_CLIENTS[user_id]
+    return client
 
 ALLOWED_CANDIDATE_NAMES = ["валерия", "цицилина", "валерия цицилина", "valeria"]
 
@@ -1421,7 +1432,10 @@ def generate_human_reply(cand_text: str, ad_title: str, cand_history_only: str =
             reply = f"{name_prefix}{followup}".strip()
     return reply, False, ""
 
-def process_valeria_chat(chat_id: str, cand_name: str, item_title: str, msgs: list, item_id: str = "", item_url: str = "") -> bool:
+def process_valeria_chat(chat_id: str, cand_name: str, item_title: str, msgs: list, item_id: str = "", item_url: str = "", avito_client: AvitoClient = None, current_user_id: int = None, cabinet_name: str = "") -> bool:
+    active_client = avito_client or client
+    active_user_id = current_user_id or (active_client.user_id if active_client else AVITO_USER_ID)
+    cab_label = f" [{cabinet_name}]" if cabinet_name else "" 
     # Проверка на принудительный сброс истории (обнуление чата)
     cutoff_ts = CHAT_SESSION_CUTOFFS.get(chat_id, 0)
     if cutoff_ts > 0:
@@ -1444,7 +1458,7 @@ def process_valeria_chat(chat_id: str, cand_name: str, item_title: str, msgs: li
     deal_comments = str(deal.get("COMMENTS", "")) if deal else ""
 
     # Получаем код вакансии (autoload_item_id) и полное описание объявления из API Авито + из сделки Битрикс24
-    item_details = client.get_item_details(item_id) if item_id else {}
+    item_details = active_client.get_item_details(item_id) if item_id else {}
     vacancy_code = item_details.get("autoload_item_id", "")
     if not vacancy_code and deal_comments:
         m_code = re.search(r'\[B\]Код вакансии:\[/B\]\s*([^\n\r\[]+)', deal_comments)
@@ -1453,17 +1467,17 @@ def process_valeria_chat(chat_id: str, cand_name: str, item_title: str, msgs: li
     ad_description = f"{item_details.get('description', '')} {item_details.get('address', '')} {deal_comments}"
 
     # Проактивная отправка ссылки в МАКС, если рекрутер уже созвонился и перевел сделку в запрос паспорта/направление
-    if last_msg.get('author_id') == AVITO_USER_ID:
+    if last_msg.get('author_id') == active_user_id:
         if deal_stage in ['UC_REQ_PASSPORT', 'UC_ITCFIF', 'PREPAYMENT_INVOICE']:
-            has_max_sent = any("max.ru" in m.get('content', {}).get('text', '') for m in msgs[-5:] if m.get('author_id') == AVITO_USER_ID)
+            has_max_sent = any("max.ru" in m.get('content', {}).get('text', '') for m in msgs[-5:] if m.get('author_id') == active_user_id)
             if not has_max_sent:
                 fac_key = detect_facility(item_title, vacancy_code=vacancy_code, description=ad_description)
                 proactive_text = generate_max_invite_reply(fac_key, deal_id, cand_name=cand_name or "Валерия", already_sent=False)
                 print(f"\n[{datetime.datetime.now().strftime('%H:%M:%S')}] 🚀 ПРОАКТИВНАЯ ОТПРАВКА ССЫЛКИ В МАКС (стадия CRM: {deal_stage}):")
                 print(proactive_text)
-                res = client.send_message(chat_id, proactive_text)
-                print(f"✅ Отправлено в Авито! ID: {res.get('id', 'ok')}")
-                client.mark_chat_as_read(chat_id)
+                res = active_client.send_message(chat_id, proactive_text)
+                print(f"✅ Отправлено в Авито{cab_label}! ID: {res.get('id', 'ok')}")
+                active_client.mark_chat_as_read(chat_id)
                 return True
         return False
 
@@ -1472,14 +1486,14 @@ def process_valeria_chat(chat_id: str, cand_name: str, item_title: str, msgs: li
         return False
 
     cand_disp = (cand_name or 'КАНДИДАТ').upper()
-    print(f"\n[{datetime.datetime.now().strftime('%H:%M:%S')}] 🔥 СООБЩЕНИЕ ОТ {cand_disp} [{item_title}]: '{valeria_text}'")
+    print(f"\n[{datetime.datetime.now().strftime('%H:%M:%S')}]{cab_label} 🔥 СООБЩЕНИЕ ОТ {cand_disp} [{item_title}]: '{valeria_text}'")
 
     # СБРОС СЕССИИ:
     is_explicit_restart = any(w in valeria_text.lower() for w in ["начнем с чистого листа", "с чистого листа", "начнем заново", "давай заново", "давай сначала", "начать сначала", "сброс диалога"])
 
     last_close_idx = -1
     for idx, m in enumerate(msgs[:-1]):
-        if m.get('author_id') == AVITO_USER_ID:
+        if m.get('author_id') == active_user_id:
             t_bot = m.get('content', {}).get('text', '').lower()
             if any(phrase in t_bot for phrase in [
                 "заявка на данный объект уже закрыта", 
@@ -1536,16 +1550,16 @@ def process_valeria_chat(chat_id: str, cand_name: str, item_title: str, msgs: li
     update_session_profile(**profile)
 
     # Историю кандидата и историю бота берем строго из АКТИВНОЙ сессии
-    cand_msgs = [m.get('content', {}).get('text', '') for m in active_msgs if m.get('author_id') != AVITO_USER_ID and m.get('author_id') != 0]
+    cand_msgs = [m.get('content', {}).get('text', '') for m in active_msgs if m.get('author_id') != active_user_id and m.get('author_id') != 0]
     cand_history_only = " \n ".join(cand_msgs[:-1])
 
-    our_msgs = [m.get('content', {}).get('text', '') for m in active_msgs if m.get('author_id') == AVITO_USER_ID]
+    our_msgs = [m.get('content', {}).get('text', '') for m in active_msgs if m.get('author_id') == active_user_id]
     our_history = " \n ".join(our_msgs)
 
     transcript_lines = []
     # Используем скользящее окно последних 8 сообщений, чтобы не перегружать контекст и отвечать за 2-3 секунды
     for m in active_msgs[-8:]:
-        auth = 'Ассистент' if m.get('author_id') == AVITO_USER_ID else (cand_name or 'Кандидат')
+        auth = 'Ассистент' if m.get('author_id') == active_user_id else (cand_name or 'Кандидат')
         txt_m = m.get('content', {}).get('text', '').strip()
         if txt_m:
             transcript_lines.append(f"{auth}: {txt_m}")
@@ -1573,9 +1587,9 @@ def process_valeria_chat(chat_id: str, cand_name: str, item_title: str, msgs: li
 
     print(f"🤖 ОТВЕТ АССИСТЕНТА:\n{reply_text}")
 
-    res = client.send_message(chat_id, reply_text)
-    print(f"✅ Отправлено в Авито! ID: {res.get('id', 'ok')}")
-    client.mark_chat_as_read(chat_id)
+    res = active_client.send_message(chat_id, reply_text)
+    print(f"✅ Отправлено в Авито{cab_label}! ID: {res.get('id', 'ok')}")
+    active_client.mark_chat_as_read(chat_id)
 
     # Параметры извлекаем СТРОГО из текста активной сессии кандидата!
     all_cand_texts = " \n ".join(cand_msgs)
@@ -1622,12 +1636,11 @@ def process_valeria_chat(chat_id: str, cand_name: str, item_title: str, msgs: li
 
     return True
 
-def check_and_reply_valeria():
+def check_and_reply_cabinet(cab_client: AvitoClient, cab_user_id: int, cab_name: str = "") -> bool:
     try:
-        unread = client.get_unread_chats(limit=50)
-        recent = client.get_recent_chats(limit=30)
+        unread = cab_client.get_unread_chats(limit=50)
+        recent = cab_client.get_recent_chats(limit=30)
         
-        # Сортируем: самые свежие сообщения и тестовые чаты обрабатываются ПЕРВЫМИ!
         candidates = sorted(
             unread + recent,
             key=lambda c: (
@@ -1647,13 +1660,13 @@ def check_and_reply_valeria():
             
             # Если последнее сообщение отправлено нами — мы уже ответили, пропускаем
             last_msg_meta = c.get('last_message', {})
-            if last_msg_meta.get('author_id') == AVITO_USER_ID:
+            if last_msg_meta.get('author_id') == cab_user_id:
                 continue
 
             users = c.get('users', [])
             cand_name = ""
             for u in users:
-                if u.get('id') != AVITO_USER_ID:
+                if u.get('id') != cab_user_id:
                     cand_name = u.get('name', '')
                     break
             
@@ -1667,22 +1680,53 @@ def check_and_reply_valeria():
             item_id = str(item_ctx.get('id', ''))
             item_url = item_ctx.get('url', '')
             
-            raw_msgs = client.get_chat_messages(cid, limit=25)
+            raw_msgs = cab_client.get_chat_messages(cid, limit=25)
             if not raw_msgs:
                 continue
                 
             msgs = list(reversed(raw_msgs))
-            handled = process_valeria_chat(cid, cand_name, item_title, msgs, item_id=item_id, item_url=item_url)
+            handled = process_valeria_chat(
+                cid, 
+                cand_name, 
+                item_title, 
+                msgs, 
+                item_id=item_id, 
+                item_url=item_url,
+                avito_client=cab_client,
+                current_user_id=cab_user_id,
+                cabinet_name=cab_name
+            )
             if handled:
                 replied_any = True
                 time.sleep(1)
         return replied_any
             
     except Exception as e:
-        print(f"Ошибка проверки: {e}", flush=True)
+        print(f"[{cab_name or cab_user_id}] Ошибка проверки: {e}", flush=True)
         import traceback
         traceback.print_exc()
     return False
+
+def check_and_reply_valeria(user_id: int = None) -> bool:
+    """Опрашивает чаты кабинета (или всех кабинетов, если user_id не задан)."""
+    if user_id:
+        c_client = CABINET_CLIENTS.get(user_id, client)
+        c_name = getattr(c_client, "cabinet_name", str(user_id))
+        return check_and_reply_cabinet(c_client, user_id, cab_name=c_name)
+    
+    replied_any = False
+    for cab in AVITO_CABINETS:
+        c_id = cab["id"]
+        c_client = CABINET_CLIENTS.get(c_id)
+        if not c_client:
+            continue
+        try:
+            handled = check_and_reply_cabinet(c_client, c_id, cab_name=cab.get("name", ""))
+            if handled:
+                replied_any = True
+        except Exception as e_cab:
+            print(f"[{cab.get('name', c_id)}] Ошибка проверки кабинета: {e_cab}", flush=True)
+    return replied_any
 
 if __name__ == "__main__":
     print(f"\n🚀 AI-Рекрутер GSM Logistics запущен в режиме КАБИНЕТА 'Прямой работодатель' (ID: {AVITO_USER_ID})!", flush=True)
