@@ -111,7 +111,7 @@ FACILITIES = {
             "График 6/1 или 7/0, смены по 11 часов работы + 1 час на обед и перерывы."
         ),
         "housing": (
-            "Проживание бесплатное в комфортном корпоративных квартирах. "
+            "Проживание бесплатное в комфортных корпоративных квартирах. "
             "В комнатах чисто, есть вся необходимая бытовая техника (холодильники, стиральные машины, микроволновки, Wi-Fi), душ и кухня."
         ),
         "schedule": (
@@ -445,6 +445,99 @@ def generate_max_invite_reply(facility_key: str = "ABI", deal_id: str = "", cand
         f"Жмите на ссылку и отправьте боту «Начать» — он сразу всё зафиксирует!"
     )
 
+def generate_direct_max_signup_reply(
+    facility_key: str = "ABI",
+    deal_id: str = "",
+    cand_name: str = "",
+    target_subject: str = "кандидат",
+    has_phone: bool = True,
+    already_sent: bool = False
+) -> str:
+    """
+    Генерирует персональную ссылку на чат-бот в МАКС при готовности кандидата записываться сейчас.
+    Позволяет обойтись без ожидания звонка рекрутера и оформиться напрямую.
+    """
+    link = get_max_bot_link(facility_key, deal_id)
+    name_str = f"{cand_name}, " if cand_name else ""
+    is_third = target_subject in ["брат", "муж", "сын", "друг"]
+    subj_str = "вашего брата" if target_subject == "брат" else ("вашего мужа" if target_subject == "муж" else ("вашего сына" if target_subject == "сын" else "вас"))
+    subj_nom = "он" if is_third else "вы"
+
+    if already_sent:
+        return (
+            f"{name_str}ссылка на наш официальный чат-бот оформления в МАКС направлена выше:\n"
+            f"👉 {link}\n\n"
+            f"Переходите по ней и нажмите «Начать» — бот сразу забронирует место на смене, согласует удобную дату выезда и оформит электронный билет за счет компании!"
+        )
+
+    phone_clause = "" if has_phone else "\n\nИ напишите, пожалуйста, ваш контактный номер телефона, чтобы координатор зафиксировал бронь за вами в базе."
+
+    return (
+        f"{name_str}отлично! Раз {subj_nom} полностью подходите по всем условиям и готовы записываться на смену прямо сейчас — можно не ждать звонка рекрутера и оформиться быстрее напрямую через наш официальный чат-бот компании в МАКС:\n\n"
+        f"👉 {link}\n\n"
+        f"В чат-боте вы сможете:\n"
+        f"1. Выбрать удобную дату выезда и забронировать место на объекте;\n"
+        f"2. Безопасно загрузить фото паспорта для разового электронного пропуска службы безопасности на КПП завода;\n"
+        f"3. Получить электронный билет на поезд/автобус за счет компании и схему проезда с контактами встречи.\n\n"
+        f"Жмите на ссылку и отправьте боту «Начать» — он моментально зафиксирует запись!{phone_clause}"
+    )
+
+def check_is_ready_to_sign_up(text: str) -> bool:
+    """Определяет готовность кандидата записываться на смену прямо сейчас."""
+    if not text:
+        return False
+    t = text.lower()
+    patterns = [
+        r'\b(?:запиш(?:ите|и|ем|ись)|записыва(?:йте|ем|й|ются|емся)|записаться|запись\s+на\s+смену)\b',
+        r'\b(?:готов[а-я]*\s+записаться|хочу\s+записаться|готов[а-я]*\s+на\s+вахту|готов[а-я]*\s+на\s+смену)\b',
+        r'\b(?:когда\s+(?:выезжать|ехать|приехать|приступать|выходить)|куда\s+ехать)\b',
+        r'\b(?:готов[а-я]*\s+(?:выехать|ехать|приехать|приступить|работать|к\s+выезду)|хочу\s+(?:выехать|ехать|работать))\b',
+        r'\b(?:давайте\s+(?:оформляться|оформимся|записываться)|оформляйте|оформляемся|готов[а-я]*\s+оформиться)\b',
+        r'\b(?:хочу\s+поехать|готовы\s+поехать|зафиксируйте\s+за\s+мной|бронируйте|бронируйте\s+место)\b',
+        r'\b(?:ну\s+так\s+что\s+(?:брата\s+)?записываем|берете\s+меня|берете\s+нас|возьмете|возьмите)\b',
+        r'\b(?:запишите\s+меня|запишите\s+нас|запишите\s+брата|запишите\s+мужа|запишите\s+сына)\b'
+    ]
+    for p in patterns:
+        if re.search(p, t):
+            return True
+    return False
+
+def check_is_fully_qualified(profile: dict, combined_cand: str, fac_key: str = "ABI") -> bool:
+    """Проверяет, что кандидат подходит по ВСЕМ параметрам: пол, возраст 20-55, паспорт РФ, самозанятость, условия."""
+    if not profile:
+        profile = {}
+
+    # 1. Возраст: строго 20-55
+    age = profile.get("age") or extract_age(combined_cand)
+    if not age or age < 20 or age > 55:
+        return False
+
+    # 2. Гражданство: строго паспорт РФ
+    has_rf = profile.get("has_rf_passport")
+    if has_rf is False:
+        return False
+    if has_rf is None:
+        cit = extract_citizenship(combined_cand)
+        if cit != "РФ":
+            return False
+
+    # 3. Пол: проверка объекта
+    if fac_key in ["ALFA", "ALFATECH"]:
+        gender = profile.get("gender") or extract_gender(combined_cand)
+        if gender == "F":
+            return False
+
+    # 4. Самозанятость: нет явного отказа
+    t_comb = combined_cand.lower()
+    if any(k in t_comb for k in ["не хочу самозан", "только по тк", "по тк только", "не буду самозан", "не подходит самозан"]):
+        return False
+
+    # 5. Условия устраивают
+    if any(k in t_comb for k in ["не поеду", "мало платите", "не устраивает", "не подходит ставка"]):
+        return False
+
+    return True
+
 def extract_phone_number(text: str) -> str:
     if not text:
         return ""
@@ -580,6 +673,9 @@ def generate_human_reply(cand_text: str, ad_title: str, cand_history_only: str =
     combined_cand = (cand_history_only + " \n " + cand_text).strip().lower()
     fac_key = detect_facility(ad_title + " " + combined_cand, vacancy_code=vacancy_code, description=ad_description)
     fac = FACILITIES.get(fac_key, FACILITIES["ABI"])
+    max_bot_link = get_max_bot_link(fac_key, deal_id)
+    ready_to_sign_up = check_is_ready_to_sign_up(cand_text)
+    fully_qualified = check_is_fully_qualified(profile, combined_cand, fac_key)
 
     # Имя собеседника для персонального вежливого обращения
     cand_first_name = ""
@@ -606,7 +702,10 @@ def generate_human_reply(cand_text: str, ad_title: str, cand_history_only: str =
             our_history=our_history,
             cand_name=cand_first_name,
             dialogue_transcript=dialogue_transcript,
-            profile=profile
+            profile=profile,
+            max_bot_link=max_bot_link,
+            is_ready_to_sign_up=ready_to_sign_up,
+            is_fully_qualified=fully_qualified
         )
         if llm_reply and len(llm_reply.strip()) > 5:
             is_disq = False
@@ -852,7 +951,30 @@ def generate_human_reply(cand_text: str, ad_title: str, cand_history_only: str =
             reply = f"{name_prefix}номер {phone} записала, передаю нашему координатору для бронирования места и билета!"
         return reply, False, ""
 
-    # Проверка на звонок рекрутера
+    # ПРЯМАЯ ВЫДАЧА ССЫЛКИ НА ЧАТ-БОТ В МАКС С МЕТКАМИ:
+    # 1. Если кандидат подходит по всем параметрам (пол, возраст 20-55, РФ, самозанятость, условия)
+    #    И прямо пишет о готовности записываться на смену прямо сейчас ("запишите меня", "готов записаться", "записываем брата", "когда выезжать"):
+    #    -> Можно обойтись БЕЗ ожидания звонка рекрутера и СРАЗУ выдать персональную ссылку в МАКС!
+    if ready_to_sign_up and fully_qualified:
+        already_sent = "max.ru" in our_history
+        target_subj = profile.get("target_subject", "кандидат") if profile else "кандидат"
+        reply = generate_direct_max_signup_reply(
+            facility_key=fac_key,
+            deal_id=deal_id,
+            cand_name=cand_first_name,
+            target_subject=target_subj,
+            has_phone=has_phone,
+            already_sent=already_sent
+        )
+        return reply, False, ""
+
+    if ready_to_sign_up and not fully_qualified:
+        # Кандидат хочет записаться, но еще не все параметры подтверждены
+        followup = get_qual_followup()
+        reply = f"{name_prefix}с удовольствием запишем {proxy_target_acc if for_other_male else 'вас'} на смену! Чтобы забронировать место, {followup.lower() if followup.startswith('Подскажите') else followup}"
+        return reply, False, ""
+
+    # 2. Если кандидат уже созванивался с рекрутером ("позвонил", "дали добро", "куда паспорт")
     is_recruiter_called = any(k in t for k in [
         "позвонил", "позвонила", "звонил", "звонила", "набрал", "набрали",
         "созвонил", "связал", "поговорил", "сказали написать сюда", "дали добро",
@@ -876,7 +998,12 @@ def generate_human_reply(cand_text: str, ad_title: str, cand_history_only: str =
             facility_info=fac,
             cand_history=cand_history_only,
             our_history=our_history,
-            cand_name=cand_first_name
+            cand_name=cand_first_name,
+            dialogue_transcript=dialogue_transcript,
+            profile=profile,
+            max_bot_link=max_bot_link,
+            is_ready_to_sign_up=ready_to_sign_up,
+            is_fully_qualified=fully_qualified
         )
         if llm_reply:
             if our_history and llm_reply.strip().lower() in our_history.lower():
