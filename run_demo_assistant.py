@@ -52,6 +52,15 @@ CABINET_MODE = os.environ.get("CABINET_MODE", "1") == "1"
 ONLY_NEW_CHATS = True
 BOT_START_TIME = int(os.environ.get("BOT_START_TIME", str(int(time.time()))))
 
+NUMERIC_ITEMS_MAP_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "numeric_mapping.json")
+KNOWN_NUMERIC_ITEMS = {}
+if os.path.exists(NUMERIC_ITEMS_MAP_FILE):
+    try:
+        with open(NUMERIC_ITEMS_MAP_FILE, "r", encoding="utf-8") as f:
+            KNOWN_NUMERIC_ITEMS = json.load(f)
+    except Exception:
+        pass
+
 ACTIVE_NEW_CHATS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "active_new_chats.json")
 
 def load_active_new_chats() -> set:
@@ -367,6 +376,47 @@ FACILITIES = {
             "Подскажите, пожалуйста, сколько вам полных лет и из какого города планируете приехать?"
         )
     },
+        "ARNIKA_RAMENSKOE": {
+        "title": "Мебельный склад Арника (МО, г. Раменское)",
+        "facility_name": "Арника Раменское",
+        "project_enum": "3056",
+        "tag": "ramenskoe",
+        "duties": (
+            "Погрузочно-разгрузочные работы на теплом современном мебельном складе, перемещение мебели и комплектующих."
+        ),
+        "shift_text": (
+            "Вахта на ваш выбор: короткая вахта 18 смен либо 30 смен. Смены с 8:00 до 20:00, график 6/1."
+        ),
+        "housing": (
+            "Бесплатное проживание в благоустроенных квартирах в шаговой доступности от склада в Раменском. Заселение сразу в день приезда."
+        ),
+        "schedule": (
+            "График 6/1, дневные смены с 8:00 до 20:00 (11 часов работы + перерывы и обед)."
+        ),
+        "pay": (
+            "Ставка 4 200 ₽ за смену! Еженедельные авансы по 5 000 ₽. Компенсация дороги до 5 000 ₽ при вахте от 30 смен. Перевахтовка +5 000 ₽."
+        ),
+        "food": (
+            "На складе чистая комната отдыха и приема пищи с холодильниками и микроволновками, компенсация питания."
+        ),
+        "transport": (
+            "МО, г. Раменское. Встречаем и заселяем в квартиры в день обращения."
+        ),
+        "medbook": (
+            "Медкнижка не требуется!"
+        ),
+        "intro": (
+            "{greeting}\n\n"
+            "Вахта в МО (г. Раменское) на современный склад мебели «Арника»!\n\n"
+            "• Фиксированная ставка: 4 200 ₽ за смену (126 000 ₽ за 30 смен чистыми);\n"
+            "• Срок вахты: 18 смен или 30 смен на выбор;\n"
+            "• Проживание: бесплатное в квартирах в шаговой доступности от склада;\n"
+            "• Еженедельные авансы по 5 000 ₽ (первый аванс уже после 3 смен);\n"
+            "• Компенсация проезда до 5 000 ₽ + акция приведи друга 5 000 ₽;\n"
+            "• Мужчины от 20 до 50 лет, паспорт РФ, без СБ и без опыта.\n\n"
+            "Подскажите, сколько вам полных лет и когда готовы выехать на смену?"
+        )
+    },
     "STANDART_SPB": {
         "title": "Склад оконного профиля и стеклопакетов Стандарт (г. Санкт-Петербург, м. Обухово)",
         "facility_name": "Стандарт СПБ",
@@ -421,7 +471,14 @@ def detect_facility(text: str, vacancy_code: str = "", description: str = "") ->
     - Приоритет №2: Уникальные продуктовые и брендовые маркеры
     """
     code_up = (vacancy_code or "").upper().strip()
-    # Текст для анализа формируется СТРОГО из Заголовка и Описания (БЕЗ поля адреса публикации!)
+    
+    # 0.0 ПРОВЕРКА ПО БАЗЕ ЧИСЛОВЫХ ID (179 активных объявлений)
+    if vacancy_code and vacancy_code in KNOWN_NUMERIC_ITEMS:
+        return KNOWN_NUMERIC_ITEMS[vacancy_code]
+    for num_id, fac in KNOWN_NUMERIC_ITEMS.items():
+        if num_id in code_up:
+            return fac
+
     desc_low = (description or "").lower()
     t = f"{code_up.lower()} {text or ''} {desc_low}".lower()
 
@@ -446,10 +503,13 @@ def detect_facility(text: str, vacancy_code: str = "", description: str = "") ->
             return 'SMART_VAHTA'
         return 'SMART_LOCAL'
 
-    # 0.5 Стандарт СПБ (V4_SPB_, STD_, HV_SPB_, SPB_)
+    # 0.5 Раменское (RAM_, ARNIKA_)
+    if code_up.startswith(('RAM_', 'ARNIKA_')) or 'RAMENSK' in code_up:
+        return 'ARNIKA_RAMENSKOE'
+
+    # 0.6 Стандарт СПБ (V4_SPB_, STD_, HV_SPB_, SPB_)
     if code_up.startswith(('V4_SPB_', 'STD_', 'HV_SPB_', 'SPB_', 'STANDART')):
         return 'STANDART_SPB'
-
     # =========================================================================
     # ПРИОРИТЕТ №0.5: ПРЯМАЯ СТРОКА «КОД ВАКАНСИИ: [ОБЪЕКТ]» В ОПИСАНИИ
     # =========================================================================
@@ -501,9 +561,9 @@ def detect_facility(text: str, vacancy_code: str = "", description: str = "") ->
             return 'SMART_VAHTA'
         return 'SMART_LOCAL'
 
-    # 5. Раменское (старая база складов МО — не отправлять во Владимир на АБИ!)
-    if "раменск" in t:
-        return 'SMART_LOCAL'
+    # 5. Раменское (мебельный склад Арника)
+    if any(k in t for k in ["раменск", "арник", "мебельн"]):
+        return 'ARNIKA_RAMENSKOE'
 
     # 6. Автозапчасти (Подольск, склад запчастей)
     if any(k in t for k in ["автозапчаст", "запчаст", "китайск"]) or ("подольск" in t and not has_alfa_loc and not has_alfa_prod):
@@ -539,6 +599,7 @@ FACILITY_TAGS = {
     "SMART_VAHTA": "smart",
     "ALFA": "alfa",
     "ALFATECH": "alfa",
+    "ARNIKA_RAMENSKOE": "ramenskoe",
     "STANDART_SPB": "spb"
 }
 
@@ -921,7 +982,8 @@ def generate_human_reply(cand_text: str, ad_title: str, cand_history_only: str =
             is_ready_to_sign_up=ready_to_sign_up,
             is_fully_qualified=fully_qualified,
             is_non_russian=is_non_rus,
-            has_rf_confirmed=has_rf_confirmed
+            has_rf_confirmed=has_rf_confirmed,
+            ad_description=ad_description
         )
         if llm_reply and len(llm_reply.strip()) > 5:
             is_disq = False
@@ -1238,7 +1300,8 @@ def generate_human_reply(cand_text: str, ad_title: str, cand_history_only: str =
             is_ready_to_sign_up=ready_to_sign_up,
             is_fully_qualified=fully_qualified,
             is_non_russian=is_non_rus,
-            has_rf_confirmed=has_rf_confirmed
+            has_rf_confirmed=has_rf_confirmed,
+            ad_description=ad_description
         )
         if llm_reply:
             if our_history and llm_reply.strip().lower() in our_history.lower():
