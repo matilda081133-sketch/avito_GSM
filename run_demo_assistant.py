@@ -1646,6 +1646,11 @@ def process_valeria_chat(chat_id: str, cand_name: str, item_title: str, msgs: li
     if not msgs_clean:
         return False
     last_msg = msgs_clean[-1]
+
+    # СТРОГАЯ ЗАЩИТА: Не отвечать на сообщения старше 15 минут!
+    last_msg_ts = last_msg.get('created', 0)
+    if last_msg_ts > 0 and (time.time() - last_msg_ts > 900):
+        return False
     deal = find_b24_deal_for_chat(chat_id)
     deal_id = str(deal.get("ID", "")) if deal else ""
     deal_stage = str(deal.get("STAGE_ID", "")) if deal else ""
@@ -1855,6 +1860,15 @@ def check_and_reply_cabinet(cab_client: AvitoClient, cab_user_id: int, cab_name:
             # Если последнее сообщение отправлено нами — мы уже ответили, пропускаем
             last_msg_meta = c.get('last_message', {})
             if last_msg_meta.get('author_id') == cab_user_id:
+                continue
+
+            # ЖЕСТКИЙ ФИЛЬТР: Отвечать ТОЛЬКО на свежие входящие сообщения (не старше 15 минут)!
+            # Старые переписки и архивные непрочитанные чаты категорически игнорируются!
+            msg_created = last_msg_meta.get('created', 0)
+            now_ts = time.time()
+            if msg_created > 0 and (now_ts - msg_created > 900):  # 15 минут
+                continue
+            if msg_created > 0 and msg_created < BOT_START_TIME:
                 continue
 
             users = c.get('users', [])
