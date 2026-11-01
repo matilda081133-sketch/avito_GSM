@@ -503,13 +503,19 @@ def check_is_ready_to_sign_up(text: str) -> bool:
     return False
 
 def check_is_fully_qualified(profile: dict, combined_cand: str, fac_key: str = "ABI") -> bool:
-    """Проверяет, что кандидат подходит по ВСЕМ параметрам: пол, возраст 20-55, паспорт РФ, самозанятость, условия."""
+    """
+    Проверяет, что кандидат подходит под выдачу ПРЯМОЙ ссылки в чат-бот МАКС:
+    - Пол: строго мужчины для АБИ Владимир и Альфа (Тепофол — М/Ж)
+    - Возраст: СТРОГО от 20 ДО 45 ЛЕТ (по возрасту прямая ссылка только до 45 лет, от 46 до 55 — только через рекрутера!)
+    - Гражданство: строго паспорт РФ
+    - Самозанятость и условия: согласен, нет отказов
+    """
     if not profile:
         profile = {}
 
-    # 1. Возраст: строго 20-55
+    # 1. Возраст для прямой ссылки в МАКС: строго от 20 до 45 лет!
     age = profile.get("age") or extract_age(combined_cand)
-    if not age or age < 20 or age > 55:
+    if not age or age < 20 or age > 45:
         return False
 
     # 2. Гражданство: строго паспорт РФ
@@ -521,11 +527,15 @@ def check_is_fully_qualified(profile: dict, combined_cand: str, fac_key: str = "
         if cit != "РФ":
             return False
 
-    # 3. Пол: проверка объекта
-    if fac_key in ["ALFA", "ALFATECH"]:
-        gender = profile.get("gender") or extract_gender(combined_cand)
-        if gender == "F":
-            return False
+    # 3. Пол: АБИ Владимир и Альфа — сейчас СТРОГО мужчины! Тепофол — М/Ж
+    target_subj = profile.get("target_subject", "кандидат")
+    is_third_male = target_subj in ["брат", "муж", "сын", "друг"]
+
+    if fac_key in ["ABI", "ALFA", "ALFATECH"]:
+        if not is_third_male:
+            gender = profile.get("gender") or extract_gender(combined_cand, profile.get("candidate_name", ""))
+            if gender == "Жен" or any(w in combined_cand.lower() for w in ["женщин", "девушк", "женск"]):
+                return False
 
     # 4. Самозанятость: нет явного отказа
     t_comb = combined_cand.lower()
@@ -952,7 +962,7 @@ def generate_human_reply(cand_text: str, ad_title: str, cand_history_only: str =
         return reply, False, ""
 
     # ПРЯМАЯ ВЫДАЧА ССЫЛКИ НА ЧАТ-БОТ В МАКС С МЕТКАМИ:
-    # 1. Если кандидат подходит по всем параметрам (пол, возраст 20-55, РФ, самозанятость, условия)
+    # 1. Если кандидат подходит по всем параметрам (пол, возраст до 45 лет, РФ, самозанятость, условия)
     #    И прямо пишет о готовности записываться на смену прямо сейчас ("запишите меня", "готов записаться", "записываем брата", "когда выезжать"):
     #    -> Можно обойтись БЕЗ ожидания звонка рекрутера и СРАЗУ выдать персональную ссылку в МАКС!
     if ready_to_sign_up and fully_qualified:
@@ -968,11 +978,21 @@ def generate_human_reply(cand_text: str, ad_title: str, cand_history_only: str =
         )
         return reply, False, ""
 
+    # Кандидат от 46 до 55 лет: по условиям подходит, но согласование СТРОГО через рекрутера!
+    cand_age = profile.get("age") or extract_age(combined_cand)
+    if ready_to_sign_up and cand_age and 46 <= cand_age <= 55:
+        return (
+            f"{name_prefix}по условиям возраст до 55 лет нам подходит, но для кандидатов старше 45 лет согласование проходит индивидуально через нашего рекрутера.\n\n"
+            f"Оставьте, пожалуйста, ваш контактный номер телефона — специалист лично свяжется с вами, ответит на все вопросы и согласует бронирование места на объекте!",
+            False,
+            ""
+        )
+
     if ready_to_sign_up and not fully_qualified:
         # Кандидат хочет записаться, но еще не все параметры подтверждены
         followup = get_qual_followup()
         reply = f"{name_prefix}с удовольствием запишем {proxy_target_acc if for_other_male else 'вас'} на смену! Чтобы забронировать место, {followup.lower() if followup.startswith('Подскажите') else followup}"
-        return reply, False, ""
+        return reply, False, "" ""
 
     # 2. Если кандидат уже созванивался с рекрутером ("позвонил", "дали добро", "куда паспорт")
     is_recruiter_called = any(k in t for k in [
