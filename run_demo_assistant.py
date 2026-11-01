@@ -793,7 +793,8 @@ def generate_human_reply(cand_text: str, ad_title: str, cand_history_only: str =
             phone = extract_phone_number(cand_text)
             if phone and deal_id:
                 try:
-                    sync_candidate_to_b24_deal(chat_id, cand_data={"phone": phone, "name": cand_first_name, "deal_id": deal_id})
+                    c_id = (profile.get("chat_id") if profile else "") or ""
+                    sync_candidate_to_b24_deal(c_id, cand_data={"phone": phone, "name": cand_first_name, "deal_id": deal_id})
                 except Exception as e_s:
                     print(f"B24 sync phone err: {e_s}")
 
@@ -1042,15 +1043,21 @@ def generate_human_reply(cand_text: str, ad_title: str, cand_history_only: str =
         )
         return reply, False, ""
 
-    # Кандидат от 46 до 55 лет: по условиям подходит, но согласование СТРОГО через рекрутера!
+    # Кандидат от 46 до 55 лет: общаемся В ШТАТНОМ ПОРЯДКЕ (без акцента на возрасте и без ссылок в МАКС!)
     cand_age = profile.get("age") or extract_age(combined_cand)
     if ready_to_sign_up and cand_age and 46 <= cand_age <= 55:
-        return (
-            f"{name_prefix}по условиям возраст до 55 лет нам подходит, но для кандидатов старше 45 лет согласование проходит индивидуально через нашего рекрутера.\n\n"
-            f"Оставьте, пожалуйста, ваш контактный номер телефона — специалист лично свяжется с вами, ответит на все вопросы и согласует бронирование места на объекте!",
-            False,
-            ""
-        )
+        if has_phone:
+            return (
+                f"{name_prefix}отлично, с радостью поможем с оформлением и бронированием места! Номер телефона ваш зафиксирован, передаю координатору — специалист свяжется с вами в ближайшее время и согласует дату выезда. Будьте на связи!",
+                False,
+                ""
+            )
+        else:
+            return (
+                f"{name_prefix}отлично, с радостью запишем вас на смену! На какой контактный номер телефона координатор может связаться с вами для бронирования места и оформления билета?",
+                False,
+                ""
+            )
 
     if ready_to_sign_up and not fully_qualified:
         # Кандидат хочет записаться, но еще не все параметры подтверждены
