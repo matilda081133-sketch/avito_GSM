@@ -58,9 +58,9 @@ def get_api_keys() -> list:
     return keys
 
 MODELS_TO_TRY = [
-    "gemini-3.1-flash-lite",
-    "gemini-flash-latest",
-    "gemini-2.5-flash"
+    "gemini-3-flash-preview",
+    "gemini-3.5-flash",
+    "gemini-3.1-flash-lite"
 ]
 
 # Распределение сделок между 3 менеджерами (Маргарита, Анастасия, Анна)
@@ -507,12 +507,62 @@ def call_gemini_llm(dialogue_transcript: str, user_message: str, cand_name: str 
 
 
 # -------------------------------------------------------------
-# GEMINI VISION (ПРОВЕРКА ФОТО ДОКУМЕНТОВ)
+# GEMINI VISION & SPEECH-TO-TEXT (МУЛЬТИМОДАЛЬНЫЙ АНАЛИЗ)
 # -------------------------------------------------------------
+def transcribe_voice_message(audio_url: str) -> str:
+    """Транскрибация голосовых сообщений кандидатов через Google Gemini Audio."""
+    if not audio_url:
+        return ""
+    keys_pool = get_api_keys()
+    try:
+        req_headers = {'User-Agent': 'Mozilla/5.0'}
+        if "max.ru" in audio_url or "platform-api" in audio_url:
+            req_headers["Authorization"] = TOKEN
+        req = urllib.request.Request(audio_url, headers=req_headers)
+        with urllib.request.urlopen(req, context=ctx, timeout=15) as r:
+            audio_bytes = r.read()
+        audio_b64 = base64.b64encode(audio_bytes).decode('utf-8')
+
+        prompt = "Ты чуткий ассистент по найму. Точно расшифруй эту голосовую запись на русском языке в связный текст. Выведи только произнесенный кандидатом текст без своих комментариев."
+        payload = {
+            'contents': [{
+                'role': 'user',
+                'parts': [
+                    {'text': prompt},
+                    {'inlineData': {'mimeType': 'audio/ogg', 'data': audio_b64}}
+                ]
+            }],
+            'generationConfig': {'temperature': 0.1, 'maxOutputTokens': 400}
+        }
+        for api_key in keys_pool:
+            for model_name in MODELS_TO_TRY:
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
+                try:
+                    req_g = urllib.request.Request(url, headers={'Content-Type': 'application/json'}, data=json.dumps(payload).encode('utf-8'))
+                    with urllib.request.urlopen(req_g, context=ctx, timeout=20) as r2:
+                        data = json.loads(r2.read().decode('utf-8'))
+                        cand = data.get('candidates', [])
+                        if cand:
+                            parts = cand[0].get('content', {}).get('parts', [])
+                            if parts and 'text' in parts[0]:
+                                text = parts[0]['text'].strip()
+                                if text:
+                                    print(f"🎙 [VOICE TRANSCRIBED via {model_name}]: '{text}'", flush=True)
+                                    return text
+                except Exception as e:
+                    print(f"[GEMINI AUDIO {model_name} ERR]: {e}", flush=True)
+    except Exception as e:
+        print(f"[AUDIO TRANSCRIBE ERR]: {e}", flush=True)
+    return ""
+
+
 def check_document_vision(img_url: str) -> dict:
     keys_pool = get_api_keys()
     try:
-        req = urllib.request.Request(img_url, headers={'User-Agent': 'Mozilla/5.0'})
+        req_headers = {'User-Agent': 'Mozilla/5.0'}
+        if "max.ru" in img_url or "platform-api" in img_url:
+            req_headers["Authorization"] = TOKEN
+        req = urllib.request.Request(img_url, headers=req_headers)
         with urllib.request.urlopen(req, context=ctx, timeout=15) as r:
             img_b64 = base64.b64encode(r.read()).decode('utf-8')
 
@@ -520,7 +570,7 @@ def check_document_vision(img_url: str) -> dict:
 Является ли это изображение:
 1) Главным разворотом паспорта РФ (2-3 страница с фотографией, ФИО и кем выдан)
 2) Разворотом паспорта РФ со штампом регистрации / прописки
-3) Или это НЕ паспорт (комната, дверь, лицо без документа, посторонний предмет, чек и т.д.)?
+3) Или это НЕ паспорт (комната, селфи, лицо без документа, посторонний предмет, животное, чек, скриншот экрана, снилс, водительские права и т.д.)?
 
 Ответь строго валидным JSON:
 {
@@ -560,7 +610,8 @@ def check_document_vision(img_url: str) -> dict:
     except Exception as e:
         print(f"[GEMINI VISION ERR]: {e}", flush=True)
 
-    return {"is_passport": True, "doc_type": "main_page", "description": "документ"}
+    # СТРОГО: При любой ошибке скачивания, таймауте или сбое — КАТЕГОРИЧЕСКИ НЕ ОДОБРЯЕМ!
+    return {"is_passport": False, "doc_type": "not_a_document", "description": "не удалось распознать документ на фото"}
 
 
 # -------------------------------------------------------------
@@ -910,17 +961,25 @@ def handle_single_update(up: dict):
             save_chat_message(chat_id, "user", text)
 
         # -------------------------------------------------------------
-        # Б. ОБРАБОТКА ГОЛОСОВЫХ И АУДИОСООБЩЕНИЙ
+        # Б. ОБРАБОТКА ГОЛОСОВЫХ И АУДИОСООБЩЕНИЙ (SPEECH-TO-TEXT)
         # -------------------------------------------------------------
         has_voice = any(att.get("type") in ["audio", "voice"] for att in attachments)
         if has_voice:
-            voice_reply = (
-                "Спасибо за сообщение! Я текстовый специалист службы заботы и не могу прослушать аудиозапись. "
-                "Пожалуйста, напишите ваш вопрос текстом или оставьте ваш номер телефона — координатор сразу перезвонит вам!"
-            )
-            send_message(chat_id, voice_reply)
-            save_chat_message(chat_id, "model", voice_reply)
-            return
+            voice_att = next((att for att in attachments if att.get("type") in ["audio", "voice"]), None)
+            voice_url = voice_att.get("payload", {}).get("url") if voice_att else None
+            transcribed = transcribe_voice_message(voice_url) if voice_url else ""
+            if transcribed:
+                print(f"🎙 [VOICE TRANSCRIBED] From {name} (Chat {chat_id}): '{transcribed}'", flush=True)
+                text = transcribed
+                save_chat_message(chat_id, "user", f"🎙 {transcribed}")
+            else:
+                voice_reply = (
+                    "Спасибо за сообщение! К сожалению, не удалось разобрать аудиозапись (возможен шум или тихий звук). "
+                    "Пожалуйста, напишите ваш вопрос текстом или оставьте ваш номер телефона — координатор сразу перезвонит вам!"
+                )
+                send_message(chat_id, voice_reply)
+                save_chat_message(chat_id, "model", voice_reply)
+                return
 
         # -------------------------------------------------------------
         # В. ОБРАБОТКА ФОТО ДОКУМЕНТОВ (GEMINI VISION)
