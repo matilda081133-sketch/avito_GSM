@@ -630,15 +630,14 @@ def find_b24_deal_for_chat(chat_id: str):
 def generate_max_invite_reply(facility_key: str = "ABI", deal_id: str = "", cand_name: str = "", already_sent: bool = False) -> str:
     """Генерирует персональную ссылку на чат-бот МАКС строго после звонка и перевода сделки в стадию 'Запрос паспорта'."""
     link = get_max_bot_link(facility_key, deal_id)
-    cand_disp = f"{cand_name}, " if (cand_name and cand_name.lower() not in ["пользователь", "авито", "клиент", "соискатель", "user", "id", "batya", "нет"]) else ""
     if already_sent:
         return (
-            f"{cand_disp}персональная ссылка на наш официальный чат-бот в МАКС направлена выше:\n"
+            f"Персональная ссылка на наш официальный чат-бот в МАКС направлена выше:\n"
             f"👉 {link}\n\n"
             f"Перейдите по ссылке и нажмите «Старт» — бот сразу зафиксирует вашу бронь по согласованным условиям!"
         )
     return (
-        f"{cand_disp}спасибо за продуктивный разговор с нашим координатором! 🤝\n\n"
+        f"Спасибо за продуктивный разговор с нашим координатором! 🤝\n\n"
         f"Как и договаривались, направляю вам персональную ссылку на наш официальный чат-бот в МАКС для бронирования даты выезда и электронного билета:\n"
         f"👉 {link}\n\n"
         f"Перейдите по ссылке и нажмите «Старт» — бот сразу зафиксирует вашу бронь по согласованным условиям!"
@@ -932,6 +931,18 @@ def extract_ready_date(text: str) -> str:
             return w
     return ""
 
+def strip_name_greetings(text: str) -> str:
+    """Удаляет любые обращения по имени в начале сообщения (например: 'Максим, добрый день' -> 'Добрый день')."""
+    if not text:
+        return text
+    text = re.sub(r'^[А-ЯЁA-Za-z][а-яёA-Za-z0-9_-]+,\s*(здравствуйте|добрый день|добрый вечер|приветствую)', r'\1', text, flags=re.IGNORECASE)
+    text = re.sub(r'^(здравствуйте|добрый день|добрый вечер|приветствую)[,\s]+[А-ЯЁA-Za-z][а-яёA-Za-z0-9_-]+[!\.,\s]*', r'\1! ', text, flags=re.IGNORECASE)
+    text = re.sub(r'^[А-ЯЁA-Za-z][а-яёA-Za-z0-9_-]+,\s*', '', text)
+    text = text.strip()
+    if text:
+        text = text[0].upper() + text[1:]
+    return text
+
 def generate_human_reply(cand_text: str, ad_title: str, cand_history_only: str = "", our_history: str = "", deal_id: str = "", deal_stage: str = "", cand_name: str = "", dialogue_transcript: str = "", profile: dict = None, vacancy_code: str = "", ad_description: str = "") -> tuple:
     """
     Интеллектуальный генератор диалога: гибкий, эмпатичный, контекстно-зависимый.
@@ -948,17 +959,9 @@ def generate_human_reply(cand_text: str, ad_title: str, cand_history_only: str =
     ready_to_sign_up = check_is_ready_to_sign_up(cand_text)
     fully_qualified = check_is_fully_qualified(profile, combined_cand, fac_key)
 
-    # Имя собеседника для персонального вежливого обращения
+    # Имя собеседника: строго нейтральное уважительное общение на «вы» без использования имени
     cand_first_name = ""
-    if cand_name:
-        clean_n = re.sub(r'[^a-zA-Zа-яА-ЯёЁ\s]', '', cand_name).strip()
-        if clean_n:
-            first = clean_n.split()[0].capitalize()
-            if first.lower() not in ["пользователь", "авито", "клиент", "соискатель", "user", "id", "batya", "нет"]:
-                cand_first_name = first
-    if not cand_first_name and "валерия" in combined_cand:
-        cand_first_name = "Валерия"
-    name_prefix = f"{cand_first_name}, " if cand_first_name else ""
+    name_prefix = ""
 
     # =========================================================================
     # PRIMARY ENGINE: GOOGLE GEMINI LLM (Kupibilet / Tinkoff Style)
@@ -971,7 +974,7 @@ def generate_human_reply(cand_text: str, ad_title: str, cand_history_only: str =
             facility_info=fac,
             cand_history=cand_history_only,
             our_history=our_history,
-            cand_name=cand_first_name,
+            cand_name="",
             dialogue_transcript=dialogue_transcript,
             profile=profile,
             max_bot_link="",  # Ссылку в МАКС в первичном диалоге не выдаем — только после звонка и перевода сделки в стадию 'Запрос паспорта'
@@ -982,6 +985,7 @@ def generate_human_reply(cand_text: str, ad_title: str, cand_history_only: str =
             ad_description=ad_description
         )
         if llm_reply and len(llm_reply.strip()) > 5:
+            llm_reply = strip_name_greetings(llm_reply)
             is_disq = False
             disq_reason = ""
             llm_lower = llm_reply.lower()
@@ -1567,7 +1571,7 @@ def generate_human_reply(cand_text: str, ad_title: str, cand_history_only: str =
     # =========================================================================
     # Первое касание (первое сообщение кандидата в диалоге)
     if not cand_history_only and not (known_age or known_cit or known_city):
-        greeting = f"Здравствуйте, {cand_first_name}!" if cand_first_name else "Здравствуйте!"
+        greeting = "Здравствуйте!"
         if for_other_male:
             intro_text = (
                 f"{greeting}\n\n"
@@ -1613,7 +1617,7 @@ def generate_human_reply(cand_text: str, ad_title: str, cand_history_only: str =
                 reply = f"{name_prefix}чтобы забронировать место за вами, уточните, пожалуйста, сколько вам полных лет?"
         else:
             reply = f"{name_prefix}{followup}".strip()
-    return reply, False, ""
+    return strip_name_greetings(reply), False, ""
 
 def process_valeria_chat(chat_id: str, cand_name: str, item_title: str, msgs: list, item_id: str = "", item_url: str = "", avito_client: AvitoClient = None, current_user_id: int = None, cabinet_name: str = "") -> bool:
     active_client = avito_client or client
@@ -1770,8 +1774,7 @@ def process_valeria_chat(chat_id: str, cand_name: str, item_title: str, msgs: li
     if is_explicit_restart and not reply_text.startswith("Здравствуйте"):
         fac_key = detect_facility(item_title, vacancy_code=vacancy_code, description=ad_description)
         intro_card = FACILITIES.get(fac_key, FACILITIES["ABI"])["intro"]
-        name_greet = f"{cand_first_name}, " if cand_first_name else ""
-        reply_text = f"{name_greet}договорились, начинаем с чистого листа!\n\n{intro_card}"
+        reply_text = f"Договорились, начинаем с чистого листа!\n\n{intro_card}"
 
     print(f"🤖 ОТВЕТ АССИСТЕНТА:\n{reply_text}")
 
@@ -1802,7 +1805,9 @@ def process_valeria_chat(chat_id: str, cand_name: str, item_title: str, msgs: li
         "vacancy": item_title or fac_info["title"],
         "vacancy_url": item_url or (f"https://www.avito.ru/{item_id}" if item_id else ""),
         "facility": facility_name,
-        "project_enum": fac_info.get("project_enum", "62")
+        "project_enum": fac_info.get("project_enum", "62"),
+        "cabinet_name": cabinet_name,
+        "cabinet_user_id": current_user_id
     }
 
     if is_disqualified:

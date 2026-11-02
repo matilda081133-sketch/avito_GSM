@@ -46,6 +46,21 @@ def call_b24(method: str, params: dict = None) -> dict:
             time.sleep(0.5)
     return {}
 
+# Маппинг кабинетов Авито на источники Битрикс24
+CABINET_TO_SOURCE = {
+    358201685: 'UC_25GHWZ', # Авито Прямой работодатель
+    438887068: '104',       # Авито Хороший выбор
+    438376151: '102',       # Авито Работа для Вас
+    '358201685': 'UC_25GHWZ',
+    '438887068': '104',
+    '438376151': '102',
+    'Прямой работодатель': 'UC_25GHWZ',
+    'Хороший выбор': '104',
+    'Работа для Вас': '102',
+    'Работа без границ': 'CALLBACK',
+    'Работа без границ!': 'CALLBACK',
+}
+
 PROJECT_ID_TO_FACILITY = {
     "62": "АБИ Владимир",
     "132": "Фарма Цвет Опалиха",
@@ -544,7 +559,7 @@ def sync_candidate_to_b24_deal(chat_id: str, cand_data: dict, is_disqualified: b
 
         res = call_b24('crm.deal.list', {
             'filter': {'%UF_CRM_1770280572875': chat_id},
-            'select': ['ID', 'TITLE', 'CONTACT_ID', 'STAGE_ID', 'ASSIGNED_BY_ID', 'CATEGORY_ID', 
+            'select': ['ID', 'TITLE', 'CONTACT_ID', 'STAGE_ID', 'ASSIGNED_BY_ID', 'CATEGORY_ID', 'SOURCE_ID',
                        'UF_CRM_1775470003043', 'UF_CRM_1768815865773', 'UF_CRM_1768816011673', 
                        'UF_CRM_1768816356722', 'UF_CRM_1768816331873', 'UF_CRM_1768816641561', 'UF_CRM_1768816560167']
         })
@@ -553,7 +568,7 @@ def sync_candidate_to_b24_deal(chat_id: str, cand_data: dict, is_disqualified: b
             # Резервный поиск по комментариям
             res = call_b24('crm.deal.list', {
                 'filter': {'%COMMENTS': chat_id},
-                'select': ['ID', 'TITLE', 'CONTACT_ID', 'STAGE_ID', 'ASSIGNED_BY_ID', 'CATEGORY_ID', 
+                'select': ['ID', 'TITLE', 'CONTACT_ID', 'STAGE_ID', 'ASSIGNED_BY_ID', 'CATEGORY_ID', 'SOURCE_ID',
                            'UF_CRM_1775470003043', 'UF_CRM_1768815865773', 'UF_CRM_1768816011673', 
                            'UF_CRM_1768816356722', 'UF_CRM_1768816331873', 'UF_CRM_1768816641561', 'UF_CRM_1768816560167']
             })
@@ -617,10 +632,14 @@ def sync_candidate_to_b24_deal(chat_id: str, cand_data: dict, is_disqualified: b
             init_cat_id = 0
             # Передвижение по воронкам и стадиям ОТКЛЮЧЕНО: все новые сделки только в воронке 0 на стадии NEW
 
+            # Определение корректного источника по кабинету отклика
+            cab_key = cand_data.get('source_id') or cand_data.get('cabinet_user_id') or cand_data.get('cabinet_name')
+            target_source = CABINET_TO_SOURCE.get(cab_key, cand_data.get('source_id', 'UC_25GHWZ'))
+
             deal_fields = {
                 'TITLE': f"{parts[0]} {' | '.join(body_parts)}",
                 'STAGE_ID': init_stage,
-                'SOURCE_ID': 'UC_25GHWZ', # Авито Прямой работодатель
+                'SOURCE_ID': target_source,
                 'ASSIGNED_BY_ID': responsible_id,
                 'UF_CRM_1770280572875': f"https://www.avito.ru/profile/messenger/channel/{chat_id}",
                 'UF_CRM_1775470003043': facility_name,
@@ -715,8 +734,11 @@ def sync_candidate_to_b24_deal(chat_id: str, cand_data: dict, is_disqualified: b
             body_parts.append("Кандидат")
 
         upd_fields['TITLE'] = f"{parts[0]} {' | '.join(body_parts)}"
+        # ВНИМАНИЕ: Если SOURCE_ID уже установлен (Wappi / Open Lines / CRM), НЕ ПЕРЕЗАПИСЫВАЕМ ЕГО!
         if not current_deal.get('SOURCE_ID'):
-            upd_fields['SOURCE_ID'] = 'UC_25GHWZ'
+            cab_key = cand_data.get('source_id') or cand_data.get('cabinet_user_id') or cand_data.get('cabinet_name')
+            fallback_source = CABINET_TO_SOURCE.get(cab_key, 'UC_25GHWZ')
+            upd_fields['SOURCE_ID'] = fallback_source
 
         # Смена ответственного допустима ТОЛЬКО на стадии "Новый отклик"
         if (existing_stage == 'NEW' or not existing_stage) and responsible_id != existing_assigned:
