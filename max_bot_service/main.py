@@ -41,10 +41,13 @@ TOKEN = os.environ.get("MAX_BOT_TOKEN", "f9LHodD0cOK373_zW5FMjbf30myDzXbw3HF5hHB
 MAX_API_BASE = "https://platform-api2.max.ru"
 B24_WEBHOOK = os.environ.get("B24_WEBHOOK_URL", "https://b24-4qx38o.bitrix24.ru/rest/39250/7cbs7mg1qo0vn0ov/")
 
-# Резервный пул валидных API-ключей Google Gemini
+# Резервный пул валидных API-ключей Google Gemini (5 рабочих ключей с авто-ротацией)
 _KEYS_POOL = [
     base64.b64decode("QVEuQWI4Uk42S0xiQURfTWVGOUJiN2F4S3pyaWNFbW9qaTlLSUgtdWZ0OW44c3FnNWpockE=").decode('utf-8'),
-    base64.b64decode("QVEuQWI4Uk42Sm9NMHBkaFIzaWJmUm11ckdNcldrVklULXJtaGltY2dSdjZJTU9BdjJ4ZkE=").decode('utf-8')
+    base64.b64decode("QVEuQWI4Uk42Sm9NMHBkaFIzaWJmUm11ckdNcldrVklULXJtaGltY2dSdjZJTU9BdjJ4ZkE=").decode('utf-8'),
+    base64.b64decode("QVEuQWI4Uk42Sl81aTlHUzFPd2hYUDd0MHB1emhxc0ZxdWlhNTlVY2RFVWpuQVdoSjRQeHc=").decode('utf-8'),
+    base64.b64decode("QVEuQWI4Uk42SVJ0T3ZDMVRsU0RtdnJUbVE5UEZaYkJtQUN6dXdDRzhyTXVFZlVZcjZucEE=").decode('utf-8'),
+    base64.b64decode("QVEuQWI4Uk42SmVfWmxsWm5uMnBEWUg1cmI1R2pQa2loYzc5R3BFbnBvVU1kaVd2YlJGUUE=").decode('utf-8'),
 ]
 
 def get_api_keys() -> list:

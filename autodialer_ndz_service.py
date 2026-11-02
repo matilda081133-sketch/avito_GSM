@@ -47,17 +47,26 @@ RECRUITERS = {
     84822: {
         "name": "Анна Боркина",
         "uis_employee_id": 10382998,
-        "virtual_phone": "79860898198"
-    },
-    84102: {
-        "name": "Анастасия Давыдова",
-        "uis_employee_id": 10373578,
-        "virtual_phone": "79860898206"
+        "virtual_phone": "79860898198",
+        "active": True
     },
     81596: {
         "name": "Маргарита Бабынина",
         "uis_employee_id": 10351298,
-        "virtual_phone": "79677875302"
+        "virtual_phone": "79677875302",
+        "active": True
+    },
+    32: {
+        "name": "Наталья Кучма",
+        "uis_employee_id": 10357418,
+        "virtual_phone": "79677875301",
+        "active": True
+    },
+    84102: {
+        "name": "Анастасия Давыдова",
+        "uis_employee_id": 10373578,
+        "virtual_phone": "79860898206",
+        "active": False  # На обеде, временно на паузе
     }
 }
 
@@ -245,7 +254,7 @@ def check_recent_call_results(state):
             continue
         
         call_type = str(c.get("CALL_TYPE")) # 1 - входящий, 2 - исходящий
-        if call_type != "2":
+        if call_type not in ["1", "2"]:
             processed_ids.add(cid)
             continue
             
@@ -465,8 +474,11 @@ def run_dialer_step():
     # Проверяем в реальном времени через UIS Call API (list.calls), кто из менеджеров сейчас на линии
     busy_emp_ids, busy_virt_phones = get_busy_uis_employees()
 
-    # Проверяем каждого из 3 рекрутеров
+    # Проверяем каждого из рекрутеров
     for uid, uinfo in RECRUITERS.items():
+        if not uinfo.get("active", True):
+            continue
+
         uname = uinfo["name"]
         uid_str = str(uid)
         emp_id = uinfo["uis_employee_id"]
@@ -491,31 +503,21 @@ def run_dialer_step():
         is_manager_busy = (emp_id in busy_emp_ids) or (virt_phone in busy_virt_phones)
 
         if is_manager_busy:
-            print(f"\n🔔 [МЕНЕДЖЕР В ЗВОНКЕ -> ОПРОС БЕЗ ПЕРЕВОДА] {uname} сейчас на линии. Звоним кандидату +{phone} (Сделка #{did}, {st_label}) без перевода на менеджера...", flush=True)
-            uis_res = call_uis_api("start.informer_call", {
-                "virtual_phone_number": virt_phone,
-                "contact": phone,
-                "contact_message": {
-                    "type": "tts",
-                    "value": "Здравствуйте! Звоним по вашему отклику на работу на Авито. Сейчас все менеджеры на линии и заканчивают разговоры. Мы перезвоним вам в течение пары минут, пожалуйста, будьте на связи!"
-                }
-            })
-        else:
-            print(f"\n🚀 [ИНИЦИАЦИЯ ВЫЗОВА В СОФТФОН UIS] {uname} (Employee ID: {emp_id}) -> Сделка #{did} | Тел кандидата: +{phone} | Линия: +{virt_phone} | Стадия: {st_label}", flush=True)
-            # Вызываем официальный метод UIS Call API start.employee_call:
-            # Звонок идет кандидату, проигрывается автоприветствие без необходимости нажимать кнопки,
-            # и кандидат соединяется со свободным рекрутером в софтфон UIS!
-            uis_res = call_uis_api("start.employee_call", {
-                "first_call": "contact",
-                "contact": phone,
-                "employee": {"id": emp_id},
-                "virtual_phone_number": virt_phone,
-                "contact_message": {
-                    "type": "tts",
-                    "value": "Здравствуйте! По поводу вашего отклика на работу на Авито. Если вам удобно говорить — скажите Да или оставайтесь на линии, соединяю с менеджером."
-                },
-                "switch_at_once": False
-            })
+            print(f"⏳ [МЕНЕДЖЕР В ЗВОНКЕ] {uname} сейчас на линии. Ожидаем завершения разговора перед звонком кандидату +{phone} (Сделка #{did})...", flush=True)
+            continue
+
+        AUTODIAL_VIRTUAL_NUMBER = "79677875304" # Линия сценария автопрозвона с голосовым меню IVR
+
+        print(f"\n🚀 [ИНИЦИАЦИЯ ВЫЗОВА ПО СЦЕНАРИЮ АВТОПРОЗВОНА UIS] {uname} -> Сделка #{did} | Тел кандидата: +{phone} | Номер сценария: +{AUTODIAL_VIRTUAL_NUMBER} | Стадия: {st_label}", flush=True)
+
+        # Вызываем официальный метод UIS Call API start.vnumber_call:
+        # Звонок идет кандидату с номера 79677875304, срабатывает сценарий «автопрозвон» с голосовым меню (кнопка 1).
+        # Только при нажатии 1 вызов переводится на менеджера в обычном штатном режиме (без автоответа)!
+        uis_res = call_uis_api("start.vnumber_call", {
+            "virtual_phone_number": AUTODIAL_VIRTUAL_NUMBER,
+            "first_call": "contact",
+            "contact": phone
+        })
 
         res_data = uis_res.get("result", {}).get("data", {})
         session_id = res_data.get("call_session_id")
@@ -535,11 +537,11 @@ def run_dialer_step():
             }
             save_state(state)
             if not is_manager_busy:
-                add_timeline_comment(did, f"📞 Автопрозвон НДЗ: Инициирован вызов кандидату +{phone} через UIS.\nОтветственный рекрутер: {uname} (софтфон UIS).\nСтадия: {st_label}.\nСессия UIS: {session_id}")
+                add_timeline_comment(did, f"📞 Автопрозвон НДЗ: Инициирован вызов кандидату +{phone} через сценарий UIS (IVR Меню с кнопкой 1).\nОтветственный менеджер: {uname}.\nСтадия: {st_label}.\nСессия UIS: {session_id}")
         else:
             print(f"❌ [ОШИБКА UIS] Не удалось запустить звонок для {uname} на +{phone}: {err}", flush=True)
 
-print("🚀 Боевой сервис автодозвона НДЗ запущен (UIS start.employee_call + Битрикс24).", flush=True)
+print("🚀 Боевой сервис автодозвона НДЗ запущен (UIS start.vnumber_call + Битрикс24).", flush=True)
 
 if __name__ == "__main__":
     while True:

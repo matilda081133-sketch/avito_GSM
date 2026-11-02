@@ -30,7 +30,12 @@ SYSTEM_PROMPT = """Ты — опытный, чуткий, внимательны
    - Говори только: «прямой работодатель», «наша компания», «служба подбора». Если спрашивают компанию: «Мы прямой работодатель, федеральный производственно-логистический холдинг».
 2. ГРАЖДАНСТВО: СТРОГО ПАСПОРТ РФ.
    - Иностранным гражданам (Молдова, Таджикистан, Узбекистан, Киргизия, Армения, Беларусь, РВП, ВНЖ) — вежливый, но категоричный отказ. Служба безопасности предприятий пропуска оформляет строго по паспорту РФ.
-3. ВОЗРАСТ: СТРОГО ОТ 20 ДО 55 ЛЕТ.
+3. КАТЕГОРИЧЕСКИЙ СТРОЖАЙШИЙ ЗАПРЕТ: ЦЫГАНЕ (РОМАЛА):
+   - Кандидатов цыганской национальности (цыгане, цыганка, цыган, ромала) МЫ НЕ ПРИНИМАЕМ НИ ПРИ КАКИХ ОБСТОЯТЕЛЬСТВАХ! Служба безопасности производств и складов дает 100% категорический отказ и блокирует пропуск.
+   - Если кандидат прямо или косвенно пишет, что он/она/родственник цыганской национальности (например: «я цыган», «цыганка», «цыгане», «цыганской национальности») — КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО писать «национальность значения не имеет» или просить паспорт/телефон!
+   - НЕМЕДЛЕННЫЙ ВЕЖЛИВЫЙ ОТКАЗ:
+     «К сожалению, по требованиям службы безопасности предприятия и регламенту производства согласование на данный объект невозможно, набор закрыт. Спасибо за обращение!»
+4. ВОЗРАСТ: СТРОГО ОТ 20 ДО 55 ЛЕТ.
    - 18 и 19 лет — ВЕЖЛИВЫЙ ОТКАЗ: служба безопасности предприятий согласовывает кандидатов строго с 20 лет. Если кандидату или родственнику 18–19 лет — вежливо отказать и пожелать удачи, как только исполнится 20.
    - 20–55 лет — ПОЛНОЕ СОГЛАСОВАНИЕ (отличный рабочий возраст!).
    - Старше 55 лет — вежливый отказ по ограничению производства.
@@ -110,21 +115,38 @@ SYSTEM_PROMPT = """Ты — опытный, чуткий, внимательны
 
 import base64
 
-_DEF_KEY = base64.b64decode("QVEuQWI4Uk42S0xiQURfTWVGOUJiN2F4S3pyaWNFbW9qaTlLSUgtdWZ0OW44c3FnNWpockE=").decode('utf-8')
+# Многоуровневый пул валидных API-ключей Google Gemini (5 рабочих ключей)
+_KEYS_POOL = [
+    base64.b64decode("QVEuQWI4Uk42S0xiQURfTWVGOUJiN2F4S3pyaWNFbW9qaTlLSUgtdWZ0OW44c3FnNWpockE=").decode('utf-8'),
+    base64.b64decode("QVEuQWI4Uk42Sm9NMHBkaFIzaWJmUm11ckdNcldrVklULXJtaGltY2dSdjZJTU9BdjJ4ZkE=").decode('utf-8'),
+    base64.b64decode("QVEuQWI4Uk42Sl81aTlHUzFPd2hYUDd0MHB1emhxc0ZxdWlhNTlVY2RFVWpuQVdoSjRQeHc=").decode('utf-8'),
+    base64.b64decode("QVEuQWI4Uk42SVJ0T3ZDMVRsU0RtdnJUbVE5UEZaYkJtQUN6dXdDRzhyTXVFZlVZcjZucEE=").decode('utf-8'),
+    base64.b64decode("QVEuQWI4Uk42SmVfWmxsWm5uMnBEWUg1cmI1R2pQa2loYzc5R3BFbnBvVU1kaVd2YlJGUUE=").decode('utf-8'),
+]
 
-def get_api_key() -> str:
-    api_key = os.environ.get("GEMINI_API_KEY", "").strip()
-    if not api_key:
+def get_api_keys() -> List[str]:
+    keys = []
+    env_k = os.environ.get("GEMINI_API_KEY", "").strip()
+    if env_k:
+        keys.append(env_k)
+    else:
         env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
         if os.path.exists(env_path):
             with open(env_path, "r", encoding="utf-8") as f:
                 for line in f:
                     if line.startswith("GEMINI_API_KEY="):
-                        api_key = line.split("=", 1)[1].strip()
+                        k = line.split("=", 1)[1].strip()
+                        if k and k not in keys:
+                            keys.append(k)
                         break
-    if not api_key:
-        api_key = _DEF_KEY
-    return api_key
+    for k in _KEYS_POOL:
+        if k not in keys:
+            keys.append(k)
+    return keys
+
+def get_api_key() -> str:
+    keys = get_api_keys()
+    return keys[0] if keys else "" 
 
 def strip_name_greetings(text: str) -> str:
     """Удаляет любые обращения по имени в начале сообщения (например: 'Максим, добрый день' -> 'Добрый день')."""
@@ -154,11 +176,15 @@ def generate_llm_reply(
     has_rf_confirmed: bool = False,
     ad_description: str = ""
 ) -> Optional[str]:
-    api_key = get_api_key()
-    if not api_key:
+    cand_text_lower = (cand_text or "").lower()
+    if re.search(r'цыган|циган|ромал', cand_text_lower):
+        logger.warning(f"Категорический отказ кандидату (цыгане/ромала): {cand_text}")
+        return "Здравствуйте! К сожалению, по требованиям службы безопасности предприятия и регламенту производства согласование на данный объект невозможно, набор закрыт. Спасибо за обращение!"
+
+    keys_pool = get_api_keys()
+    if not keys_pool:
         return None
 
-    import re
     # Очистка текста объявления от лишних HTML-тегов для чистого восприятия нейросетью
     clean_desc = re.sub(r'<[^>]+>', ' ', ad_description or '').strip()
     clean_desc = re.sub(r'\s+', ' ', clean_desc)
@@ -242,62 +268,67 @@ def generate_llm_reply(
     full_system_prompt = f"{SYSTEM_PROMPT}\n\nДОПОЛНИТЕЛЬНЫЕ ПРАВИЛА ИЗ БАЗЫ ЗНАНИЙ:\n{learned_rules_text}"
 
     models_to_try = [
-        "gemini-3-flash-preview",
+        "gemini-flash-lite-latest",
         "gemini-3.5-flash-lite",
-        "gemini-3.8-flash",
         "gemini-3.1-flash-lite",
-        "gemini-3.1-flash-lite-preview",
+        "gemini-3.6-flash",
+        "gemini-3-flash-preview",
         "gemini-flash-latest"
     ]
 
-    for m in models_to_try:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent?key={api_key}"
-        # We try zero thinking budget first so response comes back in < 1s without burning output tokens on internal CoT
-        configs_to_try = [
-            {"temperature": 0.7, "maxOutputTokens": 600, "thinkingConfig": {"thinkingBudget": 0}},
-            {"temperature": 0.7, "maxOutputTokens": 600}
-        ]
+    for api_key in keys_pool:
+        for m in models_to_try:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent?key={api_key}"
+            # We try zero thinking budget first so response comes back in < 1s without burning output tokens on internal CoT
+            configs_to_try = [
+                {"temperature": 0.7, "maxOutputTokens": 600, "thinkingConfig": {"thinkingBudget": 0}},
+                {"temperature": 0.7, "maxOutputTokens": 600}
+            ]
 
-        for gen_cfg in configs_to_try:
-            payload = {
-                "system_instruction": {
-                    "parts": [{"text": full_system_prompt}]
-                },
-                "contents": [
-                    {
-                        "role": "user",
-                        "parts": [{"text": user_prompt}]
-                    }
-                ],
-                "generationConfig": gen_cfg
-            }
-            try:
-                resp = requests.post(url, json=payload, timeout=18)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    candidates = data.get("candidates", [])
-                    if candidates:
-                        parts = candidates[0].get("content", {}).get("parts", [])
-                        if parts and "text" in parts[0]:
-                            reply = parts[0]["text"].strip()
-                            # Safety filter
-                            if "фото паспорта" in reply.lower() and ("пришлите" in reply.lower() or "скиньте" in reply.lower()):
-                                reply = reply.replace("фото паспорта", "подтверждение гражданства РФ")
-                            if len(reply) > 550:
-                                dot_idx = reply[:550].rfind(".")
-                                if dot_idx > 100:
-                                    reply = reply[:dot_idx + 1]
+            success_key = False
+            for gen_cfg in configs_to_try:
+                payload = {
+                    "system_instruction": {
+                        "parts": [{"text": full_system_prompt}]
+                    },
+                    "contents": [
+                        {
+                            "role": "user",
+                            "parts": [{"text": user_prompt}]
+                        }
+                    ],
+                    "generationConfig": gen_cfg
+                }
+                try:
+                    resp = requests.post(url, json=payload, timeout=18)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        candidates = data.get("candidates", [])
+                        if candidates:
+                            parts = candidates[0].get("content", {}).get("parts", [])
+                            if parts and "text" in parts[0]:
+                                reply = parts[0]["text"].strip()
+                                # Safety filter
+                                if "фото паспорта" in reply.lower() and ("пришлите" in reply.lower() or "скиньте" in reply.lower()):
+                                    reply = reply.replace("фото паспорта", "подтверждение гражданства РФ")
+                                if len(reply) > 550:
+                                    dot_idx = reply[:550].rfind(".")
+                                    if dot_idx > 100:
+                                        reply = reply[:dot_idx + 1]
                                 else:
                                     reply = reply[:550]
-                            return strip_name_greetings(reply)
-                elif resp.status_code == 400 and "thinkingConfig" in gen_cfg:
-                    # Model might not support thinkingConfig, fall through to retry without it
-                    continue
-                else:
-                    logger.warning(f"Model {m} returned {resp.status_code}: {resp.text[:100]}")
+                                return strip_name_greetings(reply)
+                    elif resp.status_code == 400 and "thinkingConfig" in gen_cfg:
+                        # Model might not support thinkingConfig, retry without it
+                        continue
+                    elif resp.status_code == 429:
+                        logger.warning(f"Key {api_key[:8]}... hit 429 on {m}. Rotating to next key in pool...")
+                        break  # Break inner configs and models to jump to next key
+                    else:
+                        logger.warning(f"Model {m} returned {resp.status_code}: {resp.text[:100]}")
+                        break
+                except Exception as e:
+                    logger.warning(f"Model {m} request failed: {e}")
                     break
-            except Exception as e:
-                logger.warning(f"Model {m} request failed: {e}")
-                break
 
     return None

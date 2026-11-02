@@ -482,11 +482,12 @@ def get_or_reveal_candidate_phone(chat_id: str, client=None, context: dict = Non
 # Команда рекрутеров в Битрикс24
 VALERIA_MARKETER_ID = 82166    # Валерия Цицилина (Маркетолог)
 RECRUITERS = [
-    {"id": 40, "name": "Виктория Фарафонова"},
-    {"id": 32, "name": "Наталья Кучма"},
+    {"id": 84822, "name": "Анна Боркина"},
     {"id": 81596, "name": "Маргарита Бабынина"},
+    {"id": 32, "name": "Наталья Кучма"},
+    {"id": 84102, "name": "Анастасия Давыдова"},
 ]
-RECRUITER_IDS = [40, 32, 81596]
+RECRUITER_IDS = [84822, 81596, 32, 84102]
 NOTIFY_USER_IDS = [] # Полностью отключена массовая рассылка уведомлений по запросу пользователя
 
 _recruiter_cycle = 0
@@ -674,14 +675,8 @@ def sync_candidate_to_b24_deal(chat_id: str, cand_data: dict, is_disqualified: b
             print(f"[B24 SYNC] Создана новая сделка #{deal_id} (Менеджер {responsible_id}) для чата {chat_id}")
             current_deal = deal_fields
         else:
-            # Сделка уже существовала ранее
-            if existing_stage == 'NEW' or not existing_stage:
-                if existing_assigned in RECRUITER_IDS:
-                    responsible_id = existing_assigned
-                else:
-                    responsible_id = get_next_recruiter_id()
-            else:
-                responsible_id = existing_assigned if existing_assigned else get_next_recruiter_id()
+            # Сделка уже существовала ранее: СТРОГО СОХРАНЯЕМ СУЩЕСТВУЮЩЕГО ОТВЕТСТВЕННОГО!
+            responsible_id = existing_assigned if existing_assigned else get_next_recruiter_id()
 
         comm = current_deal.get('COMMENTS', '') if current_deal else ''
         existing_obj = current_deal.get('UF_CRM_1775470003043', '') if current_deal else ''
@@ -740,8 +735,8 @@ def sync_candidate_to_b24_deal(chat_id: str, cand_data: dict, is_disqualified: b
             fallback_source = CABINET_TO_SOURCE.get(cab_key, 'UC_25GHWZ')
             upd_fields['SOURCE_ID'] = fallback_source
 
-        # Смена ответственного допустима ТОЛЬКО на стадии "Новый отклик"
-        if (existing_stage == 'NEW' or not existing_stage) and responsible_id != existing_assigned:
+        # Запрет смены ответственного: если ответственный уже назначен в сделке, никогда его не трогаем!
+        if not existing_assigned and responsible_id:
             upd_fields['ASSIGNED_BY_ID'] = responsible_id
 
         # =====================================================================
