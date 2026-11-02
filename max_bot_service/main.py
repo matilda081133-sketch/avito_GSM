@@ -62,14 +62,11 @@ def get_api_keys() -> list:
 
 MODELS_TO_TRY = [
     "gemini-flash-lite-latest",
-    "gemini-3.5-flash-lite",
-    "gemini-3.1-flash-lite",
-    "gemini-3.6-flash"
+    "gemini-3.1-flash-lite-preview",
+    "gemini-flash-latest"
 ]
 
-# Распределение сделок между 3 менеджерами (Маргарита, Анастасия, Анна)
-GIRLS_QUEUE = ["81596", "84102", "84822"]
-current_girl_idx = 0
+# Кандидаты привязаны к существующим сделкам в Битрикс24 (без распределения и дублирования сделок)
 
 ctx = ssl.create_default_context()
 ctx.check_hostname = False
@@ -191,6 +188,11 @@ SYSTEM_PROMPT_ENTERPRISE_RECRUITER = f"""Ты — чуткий, внимател
 • В профилях мессенджера часто указаны никнеймы, псевдонимы или аккаунты родственников.
 • Никогда не обращайся по имени! Общайся нейтрально, вежливо и уважительно на «вы».
 • Любые фразы вида «Здравствуйте, [Имя]!» СТРОГО ЗАПРЕЩЕНЫ. Только «Здравствуйте!» или «Добрый день!».
+
+10. КАТЕГОРИЧЕСКИЙ ОТКАЗ ПО НАЦИОНАЛЬНОСТИ (ЦЫГАНЕ/РОМАЛЫ):
+• Если кандидат прямо или косвенно упоминает, что он цыган, цыганка, ромал или цыганской национальности:
+  МОМЕНТАЛЬНЫЙ ВЕЖЛИВЫЙ ОТКАЗ: «К сожалению, в настоящее время мы не можем предложить вам подходящие вакансии. Благодарим за интерес к нашей компании!»
+• Никаких дальнейших вопросов, уговоров и квалификаций!
 """
 
 
@@ -259,6 +261,42 @@ def save_chat_message(chat_id, role, text):
         conn.close()
     except Exception as e:
         print(f"[DB SAVE MSG ERR]: {e}", flush=True)
+
+
+def get_chat_history(chat_id: int, limit: int = 10) -> list:
+    """Возвращает историю сообщений чата из локальной SQLite БД."""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+        cur.execute("SELECT role, text FROM bot_messages WHERE chat_id = ? ORDER BY id DESC LIMIT ?", (chat_id, limit))
+        rows = cur.fetchall()
+        conn.close()
+        return list(reversed(rows))
+    except Exception as e:
+        print(f"[GET CHAT HISTORY ERR]: {e}", flush=True)
+        return []
+
+
+def has_chat_history(chat_id: int) -> bool:
+    """Проверяет наличие хотя бы одного сообщения в локальной SQLite БД."""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+        cur.execute("SELECT id FROM bot_messages WHERE chat_id = ? LIMIT 1", (chat_id,))
+        row = cur.fetchone()
+        conn.close()
+        return bool(row)
+    except Exception:
+        return False
+
+
+def check_gypsy_refusal(text: str) -> bool:
+    """Проверяет наличие маркеров цыганской национальности для мгновенного отказа по регламенту СБ."""
+    if not text:
+        return False
+    pattern = r'\b(цыган|цыгане|цыганка|цыганами|цыганам|цыганах|циган|цигане|циганка|циганами|циганам|ромал|ромалы|ромалэ|ромале|ромалов|ромалам|ромалами)\b'
+    return bool(re.search(pattern, text, re.IGNORECASE))
+
 
 
 def get_live_transcript(chat_id, count=10):
@@ -562,13 +600,14 @@ def check_document_vision(img_url: str) -> dict:
             req_headers["Authorization"] = TOKEN
         req = urllib.request.Request(img_url, headers=req_headers)
         with urllib.request.urlopen(req, context=ctx, timeout=15) as r:
-            img_b64 = base64.b64encode(r.read()).decode('utf-8')
+            img_bytes = r.read()
+        img_b64 = base64.b64encode(img_bytes).decode('utf-8')
 
         prompt = """Посмотри внимательно на изображение.
 Является ли это изображение:
 1) Главным разворотом паспорта РФ (2-3 страница с фотографией, ФИО и кем выдан)
 2) Разворотом паспорта РФ со штампом регистрации / прописки
-3) Или это НЕ паспорт (комната, селфи, лицо без документа, посторонний предмет, животное, чек, скриншот экрана, снилс, водительские права и т.д.)?
+3) Или это НЕ паспорт (комната, селфи, лицо без документа, посторонний предмет, животное, чек, скриншот экрана, снилс, водительские права, фото улицы и т.д.)?
 
 Ответь строго валидным JSON:
 {
@@ -595,13 +634,30 @@ def check_document_vision(img_url: str) -> dict:
                     req_g = urllib.request.Request(url, headers={'Content-Type': 'application/json'}, data=json.dumps(payload).encode('utf-8'))
                     with urllib.request.urlopen(req_g, context=ctx, timeout=20) as r2:
                         data = json.loads(r2.read().decode('utf-8'))
-                        txt = data['candidates'][0]['content']['parts'][0]['text']
-                        parsed = json.loads(txt)
-                        return {
-                            "is_passport": bool(parsed.get("is_passport")),
-                            "doc_type": parsed.get("doc_type", "not_a_document"),
-                            "description": parsed.get("description", "")
-                        }
+                        cand = data.get('candidates', [])
+                        if not cand:
+                            continue
+                        parts = cand[0].get('content', {}).get('parts', [])
+                        if not parts or 'text' not in parts[0]:
+                            continue
+                        txt = parts[0]['text'].strip()
+                        clean_txt = re.sub(r'^```(?:json)?\s*', '', txt, flags=re.IGNORECASE)
+                        clean_txt = re.sub(r'\s*```$', '', clean_txt).strip()
+                        parsed = json.loads(clean_txt)
+                        is_pass = bool(parsed.get("is_passport"))
+                        dtype = str(parsed.get("doc_type", "not_a_document")).lower().strip()
+                        if is_pass and dtype in ["main_page", "registration_page"]:
+                            return {
+                                "is_passport": True,
+                                "doc_type": dtype,
+                                "description": parsed.get("description", "разворот паспорта РФ")
+                            }
+                        else:
+                            return {
+                                "is_passport": False,
+                                "doc_type": "not_a_document",
+                                "description": parsed.get("description", "не является паспортом")
+                            }
                 except Exception as e:
                     print(f"[GEMINI VISION {model_name} ERR]: {e}", flush=True)
 
@@ -716,60 +772,87 @@ def get_b24_deal(deal_id):
         print(f"[B24 GET DEAL ERROR]: {e}", flush=True)
         return None
 
-def create_b24_deal(name, phone, object_title="АБИ", chat_id=None, source_label="Официальный МАКС Бот"):
-    global current_girl_idx
-    manager_id = GIRLS_QUEUE[current_girl_idx % len(GIRLS_QUEUE)]
-    current_girl_idx += 1
-
-    source_id = "MAX_BROADCAST" if ("broadcast" in source_label.lower() or "рассылк" in source_label.lower()) else "OTHER"
-
+def notify_b24_manager(manager_id, message: str):
+    """Отправляет персональное системное уведомление в колокольчик менеджеру в Битрикс24."""
+    if not manager_id or not B24_WEBHOOK:
+        return
     try:
-        c_url = f"{B24_WEBHOOK}crm.contact.add.json"
-        c_payload = {
-            "fields": {
-                "NAME": name or "Кандидат МАКС",
-                "PHONE": [{"VALUE": phone, "VALUE_TYPE": "WORK"}],
-                "SOURCE_ID": source_id
-            }
+        url = f"{B24_WEBHOOK}im.notify.personal.add.json"
+        payload = {
+            "USER_ID": str(manager_id),
+            "MESSAGE": message
         }
-        req = urllib.request.Request(c_url, data=json.dumps(c_payload).encode('utf-8'), headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=10, context=ctx) as r:
-            cid = json.loads(r.read().decode('utf-8'))['result']
-
-        d_url = f"{B24_WEBHOOK}crm.deal.add.json"
-        d_payload = {
-            "fields": {
-                "TITLE": f"{name} - MAX Бот: {object_title}",
-                "CATEGORY_ID": 0,
-                "STAGE_ID": "NEW",
-                "CONTACT_ID": cid,
-                "ASSIGNED_BY_ID": manager_id,
-                "SOURCE_ID": source_id,
-                "SOURCE_DESCRIPTION": f"{source_label} (@id9729371578_bot) | Chat ID: {chat_id} | Интерес: {object_title}"
-            }
-        }
-        req2 = urllib.request.Request(d_url, data=json.dumps(d_payload).encode('utf-8'), headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(req2, timeout=10, context=ctx) as r2:
-            did = json.loads(r2.read().decode('utf-8'))['result']
-        print(f"⭐ [B24 СДЕЛКА СОЗДАНА] #{did} для {name} ({phone}), Источник: {source_id}, Назначена: {manager_id}", flush=True)
-
-        # Обогащаем таймлайн сделки
-        if did:
-            comment = (
-                f"🤖 Новая заявка из МАКС бота (@id9729371578_bot)\n\n"
-                f"📢 Источник: {source_label}\n"
-                f"👤 Кандидат: {name}\n"
-                f"📞 Телефон: {phone}\n"
-                f"💬 Chat ID: {chat_id}\n"
-                f"🏢 Выбранный объект: {object_title}\n"
-                f"📅 Дата: {time.strftime('%Y-%m-%d %H:%M:%S')}"
-            )
-            add_b24_timeline_comment(did, comment)
-
-        return did
+        req = urllib.request.Request(url, data=json.dumps(payload).encode('utf-8'), headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=8, context=ctx) as r:
+            pass
+        print(f"🔔 [B24 NOTIFY] Уведомление менеджеру #{manager_id} отправлено", flush=True)
     except Exception as e:
-        print(f"[B24 CREATE ERR]: {e}", flush=True)
+        print(f"[B24 NOTIFY ERR]: {e}", flush=True)
+
+
+def find_b24_deal_by_phone(phone: str):
+    """Ищет существующую сделку кандидата в Битрикс24 по номеру телефона (без создания новых сделок!)."""
+    if not phone or not B24_WEBHOOK:
         return None
+    clean_p = re.sub(r'[^0-9]', '', phone)[-10:]
+    try:
+        c_url = f"{B24_WEBHOOK}crm.contact.list.json"
+        c_payload = {"filter": {"%PHONE": clean_p}, "select": ["ID"]}
+        req = urllib.request.Request(c_url, data=json.dumps(c_payload).encode('utf-8'), headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=8, context=ctx) as r:
+            contacts = json.loads(r.read().decode('utf-8')).get('result', [])
+        if contacts:
+            cid = contacts[0]['ID']
+            d_url = f"{B24_WEBHOOK}crm.deal.list.json"
+            d_payload = {
+                "filter": {"CONTACT_ID": cid},
+                "select": ["ID", "TITLE", "ASSIGNED_BY_ID", "STAGE_ID"],
+                "order": {"ID": "DESC"}
+            }
+            req2 = urllib.request.Request(d_url, data=json.dumps(d_payload).encode('utf-8'), headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req2, timeout=8, context=ctx) as r2:
+                deals = json.loads(r2.read().decode('utf-8')).get('result', [])
+                if deals:
+                    return deals[0]
+    except Exception as e:
+        print(f"[B24 FIND DEAL ERR]: {e}", flush=True)
+    return None
+
+
+# ID закрытых рабочих чатов подбора объектов в МАКС
+OBJECT_SELECTION_CHATS = {
+    "abi": -72039570639374,       # Аби Владимир
+    "tepofol": -75926237514254,   # Тепофол Подбор
+    "smart": -72008292324686,     # ЕЛЕНА ЖИЛИНА ПОДБОР (Смарт Family Балашиха)
+    "spb": -72008292324686        # ЕЛЕНА ЖИЛИНА ПОДБОР (Стандарт СПБ)
+}
+
+def send_to_object_selection_chat(object_tag: str, summary_text: str, photo_url: str = None) -> bool:
+    """Отправляет выжимку по согласованному кандидату и фото паспорта в закрытый рабочий чат подбора объекта."""
+    chat_id = OBJECT_SELECTION_CHATS.get(str(object_tag).lower())
+    if not chat_id:
+        print(f"[OBJECT CHAT ROUTE WARN]: Нет ID чата для объекта '{object_tag}'", flush=True)
+        return False
+
+    payload = {"text": summary_text}
+    if photo_url:
+        payload["attachments"] = [{
+            "type": "image",
+            "payload": {"url": photo_url}
+        }]
+    url = f"{MAX_API_BASE}/messages?chat_id={chat_id}"
+    req = urllib.request.Request(url, data=json.dumps(payload).encode('utf-8'), headers={
+        "Authorization": TOKEN,
+        "Content-Type": "application/json"
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=10, context=ctx) as r:
+            res = json.loads(r.read().decode('utf-8'))
+            print(f"🚀 [OBJECT SELECTION CHAT SENT] В чат {chat_id} ({object_tag}): {res.get('message', {}).get('body', {}).get('mid')}", flush=True)
+            return True
+    except Exception as e:
+        print(f"[OBJECT CHAT SEND ERR]: {e}", flush=True)
+        return False
 
 
 # -------------------------------------------------------------
@@ -944,7 +1027,7 @@ def handle_single_update(up: dict):
             update_user_state(chat_id, scenario="broadcast")
             st["scenario"] = "broadcast"
 
-        if is_first_start and not get_chat_history(chat_id, limit=2):
+        if is_first_start and not has_chat_history(chat_id):
             welcome_msg = (
                 "Здравствуйте! Рада приветствовать вас. Мы — прямой работодатель, предлагаем работу и вахту с бесплатным проживанием в чистых квартирах и питанием.\n\n"
                 "Выберите интересующий объект кнопкой ниже или задайте любой вопрос:"
@@ -957,6 +1040,16 @@ def handle_single_update(up: dict):
         if text:
             print(f"📩 [MAX INCOMING] From {name} (Chat {chat_id}): '{text}'", flush=True)
             save_chat_message(chat_id, "user", text)
+
+        # -------------------------------------------------------------
+        # ЖЕСТКИЙ ФИЛЬТР: КАТЕГОРИЧЕСКИЙ ОТКАЗ ПО ЦЫГАНАМ / РОМАЛАМ
+        # -------------------------------------------------------------
+        if text and check_gypsy_refusal(text):
+            print(f"🚫 [GYPSY FILTER TRIGGERED] Chat {chat_id}: '{text}'", flush=True)
+            refusal_reply = "К сожалению, в настоящее время мы не можем предложить вам подходящие вакансии. Благодарим за интерес к нашей компании!"
+            send_message(chat_id, refusal_reply)
+            save_chat_message(chat_id, "model", refusal_reply)
+            return
 
         # -------------------------------------------------------------
         # Б. ОБРАБОТКА ГОЛОСОВЫХ И АУДИОСООБЩЕНИЙ (SPEECH-TO-TEXT)
@@ -1012,9 +1105,18 @@ def handle_single_update(up: dict):
                     update_user_state(chat_id, has_main_page=1)
                     st["has_main_page"] = 1
 
-                    # Сохраняем ссылку на фото в сделку Битрикс24
-                    if st.get("deal_id"):
-                        add_b24_timeline_comment(st.get("deal_id"), f"📷 Получено фото паспорта: Главный разворот 2-3 стр.\nСсылка: {photo_url}")
+                    # Сохраняем ссылку на фото в сделку Битрикс24 и уведомляем ответственного
+                    deal_id = st.get("deal_id")
+                    if deal_id:
+                        deal_info = get_b24_deal(deal_id)
+                        manager_id = deal_info.get("ASSIGNED_BY_ID") if deal_info else None
+                        cand_title = deal_info.get("TITLE") or st.get("name") or name or "Кандидат"
+                        add_b24_timeline_comment(deal_id, f"📷 Получено фото паспорта: Главный разворот 2-3 стр.\nСсылка: {photo_url}")
+                        if manager_id:
+                            notify_b24_manager(
+                                manager_id,
+                                f"📷 Внимание: Кандидат {cand_title} (сделка #{deal_id}) прислал в МАКС фото паспорта (главный разворот 2-3 стр.)!\nСсылка: {photo_url}"
+                            )
 
                     if not st.get("has_reg_page"):
                         reply = (
@@ -1035,9 +1137,18 @@ def handle_single_update(up: dict):
                     update_user_state(chat_id, has_reg_page=1)
                     st["has_reg_page"] = 1
 
-                    # Сохраняем ссылку на фото в сделку Битрикс24
-                    if st.get("deal_id"):
-                        add_b24_timeline_comment(st.get("deal_id"), f"📷 Получено фото паспорта: Страница с пропиской\nСсылка: {photo_url}")
+                    # Сохраняем ссылку на фото в сделку Битрикс24 и уведомляем ответственного
+                    deal_id = st.get("deal_id")
+                    if deal_id:
+                        deal_info = get_b24_deal(deal_id)
+                        manager_id = deal_info.get("ASSIGNED_BY_ID") if deal_info else None
+                        cand_title = deal_info.get("TITLE") or st.get("name") or name or "Кандидат"
+                        add_b24_timeline_comment(deal_id, f"📷 Получено фото паспорта: Страница с пропиской\nСсылка: {photo_url}")
+                        if manager_id:
+                            notify_b24_manager(
+                                manager_id,
+                                f"📷 Внимание: Кандидат {cand_title} (сделка #{deal_id}) прислал в МАКС фото паспорта (страница со штампом прописки)!\nСсылка: {photo_url}"
+                            )
 
                     if not st.get("has_main_page"):
                         reply = (
@@ -1053,14 +1164,24 @@ def handle_single_update(up: dict):
                     save_chat_message(chat_id, "model", reply)
                     return
 
+
+
         # -------------------------------------------------------------
         # Г. ФОНОВОЕ СОХРАНЕНИЕ НОМЕРА ТЕЛЕФОНА В БИТРИКС24
         # -------------------------------------------------------------
         phone = extract_phone(text)
         if phone and not st.get("phone"):
-            source_lbl = "СМС-рассылка МАКС" if st.get("scenario") == "broadcast" else "Официальный МАКС Бот"
-            did = create_b24_deal(name, phone, st.get("object", "АБИ"), chat_id=chat_id, source_label=source_lbl)
-            update_user_state(chat_id, phone=phone, deal_id=did)
+            update_user_state(chat_id, phone=phone)
+            st["phone"] = phone
+            # Привязываем к существующей сделке в Битрикс24 по номеру, если еще не привязана
+            if not st.get("deal_id"):
+                existing = find_b24_deal_by_phone(phone)
+                if existing:
+                    did = existing.get("ID")
+                    update_user_state(chat_id, deal_id=did)
+                    st["deal_id"] = did
+                    add_b24_timeline_comment(did, f"💬 Кандидат вышел на связь в МАКС Боте (@id9729371578_bot), Chat ID: {chat_id}")
+                    print(f"🔗 [B24 СДЕЛКА НАЙДЕНА И ПРИВЯЗАНА] #{did} для {phone} (Ответственный: {existing.get('ASSIGNED_BY_ID')})", flush=True)
 
         # -------------------------------------------------------------
         # Д. ПРЯМОЙ ОТВЕТ НЕЙРОСЕТИ (GEMINI LLM С ЖИВОЙ СТЕНОГРАММОЙ МАКС)
