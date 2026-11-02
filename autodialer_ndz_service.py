@@ -44,29 +44,29 @@ UIS_ACCESS_TOKEN = "mf050x3n53jnp4dft29ww26x7jm4y33rd6sd5rgw"
 MSK_TZ = timezone(timedelta(hours=3))
 
 RECRUITERS = {
-    84822: {
-        "name": "Анна Боркина",
-        "uis_employee_id": 10382998,
-        "virtual_phone": "79860898198",
-        "active": True
+    84102: {
+        "name": "Анастасия Давыдова",
+        "uis_employee_id": 10373578,
+        "virtual_phone": "79860898206",
+        "active": True   # ВКЛЮЧЕНО
     },
     81596: {
         "name": "Маргарита Бабынина",
         "uis_employee_id": 10351298,
         "virtual_phone": "79677875302",
-        "active": True
+        "active": True   # ВКЛЮЧЕНО
     },
     32: {
         "name": "Наталья Кучма",
         "uis_employee_id": 10357418,
         "virtual_phone": "79677875301",
-        "active": True
+        "active": False  # Пока выключено
     },
-    84102: {
-        "name": "Анастасия Давыдова",
-        "uis_employee_id": 10373578,
-        "virtual_phone": "79860898206",
-        "active": False  # На обеде, временно на паузе
+    84822: {
+        "name": "Анна Боркина",
+        "uis_employee_id": 10382998,
+        "virtual_phone": "79860898198",
+        "active": False  # Пока выключено
     }
 }
 
@@ -112,7 +112,7 @@ def load_state():
                 return json.load(f)
         except Exception:
             pass
-    return {"called_today": {}, "last_call_time": {}, "processed_call_ids": []}
+    return {"called_today": {}, "last_call_time": {}, "pending_calls": {}, "processed_call_ids": []}
 
 def save_state(state):
     try:
@@ -132,6 +132,34 @@ def add_timeline_comment(entity_id, comment_text, entity_type="deal"):
         })
     except Exception as e:
         print(f"Ошибка добавления комментария в таймлайн сделки {entity_id}: {e}", flush=True)
+
+def notify_candidate_pressed_one(user_id, deal_id, deal_title, phone):
+    """
+    Отправляет персональное уведомление в колокольчик менеджеру в Битрикс24
+    когда кандидат в автопрозвоне взял трубку и нажал 1 (подтвердил актуальность поиска работы).
+    """
+    deal_url = f"https://b24-4qx38o.bitrix24.ru/crm/deal/details/{deal_id}/"
+    notify_msg = (
+        f"🔥 [B]Автопрозвон: Кандидат подтвердил актуальность (нажал 1)![/B]\n"
+        f"Сделка #{deal_id}: {deal_title}\n"
+        f"Телефон: +{phone}\n"
+        f"Кандидат прямо сейчас на связи! Срочно перезвоните ему:\n"
+        f"👉 [URL={deal_url}]Открыть сделку #{deal_id}[/URL]"
+    )
+    try:
+        requests.post(f"{B24_NOTIFY_WEBHOOK_URL}im.notify.system.add", json={
+            "USER_ID": int(user_id),
+            "MESSAGE": notify_msg
+        }, timeout=8)
+    except Exception as e:
+        print(f"Ошибка отправки колокольчика менеджеру {user_id}: {e}", flush=True)
+
+    add_timeline_comment(
+        deal_id,
+        f"🔥 [B]Автопрозвон НДЗ:[/B] Кандидат +{phone} взял трубку и подтвердил актуальность поиска работы (нажал 1).\n"
+        f"Ответственному менеджеру отправлено персональное уведомление перезвонить прямо сейчас."
+    )
+    print(f"🔥 [КАНДИДАТ НАЖАЛ 1] Сделка #{deal_id} (+{phone}) — менеджеру {user_id} отправлено уведомление!", flush=True)
 
 def notify_recruiter_candidate_answered_while_busy(user_id, deal_id, deal_title, phone, stage_label):
     """
@@ -225,163 +253,108 @@ def get_next_ndz_deal_for_recruiter(user_id, called_today):
                     return d, norm_ph, st
     return None, None, None
 
-def check_recent_call_results(state):
+def advance_deal_stage(did, current_stage, recruiter_name, fail_reason):
     """
-    Проверяет результаты недавних звонков через voximplant.statistic.get
-    И автоматически двигает сделки при недозвонах:
-    - НДЗ 1 (EXECUTING) -> НДЗ 2 (UC_NDZ2)
-    - НДЗ 2 (UC_NDZ2) -> НДЗ 3 (UC_NDZ3)
+    Переводит сделку строго на следующий этап после подтвержденного недозвона робота:
+    НДЗ 1 (EXECUTING) -> НДЗ 2 (UC_NDZ2)
+    НДЗ 2 (UC_NDZ2) -> НДЗ 3 (UC_NDZ3)
+    НДЗ 3 (UC_NDZ3) -> остается в НДЗ 3 (закрытие в Неуспех в 18:00)
     """
-    now = datetime.now(MSK_TZ)
-    processed_ids = set(state.setdefault("processed_call_ids", []))
-    
-    since_time = (now - timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S")
-    stats = call_b24("voximplant.statistic.get", {
-        "FILTER": {">CALL_START_DATE": since_time},
-        "SORT": "CALL_START_DATE",
-        "ORDER": "DESC",
-        "LIMIT": 50
-    }).get("result", [])
+    if current_stage == "EXECUTING":
+        call_b24("crm.deal.update", {
+            "id": did,
+            "fields": {"STAGE_ID": "UC_NDZ2"}
+        })
+        add_timeline_comment(did, f"🤖 Автопрозвон НДЗ: Недозвон ({fail_reason}).\nСделка переведена: НДЗ 1 ➔ НДЗ 2.\nСледующий звонок не ранее чем через 2.5 часа (защита от спама).")
+        print(f"⏩ [НЕДОЗВОН 1 -> НДЗ 2] Сделка #{did} ({recruiter_name}) переведена в UC_NDZ2", flush=True)
 
-    for c in stats:
-        cid = str(c.get("ID"))
-        if cid in processed_ids:
-            continue
-        
-        user_id = int(c.get("PORTAL_USER_ID") or 0)
-        if user_id not in RECRUITERS:
-            processed_ids.add(cid)
-            continue
-        
-        call_type = str(c.get("CALL_TYPE")) # 1 - входящий, 2 - исходящий
-        if call_type not in ["1", "2"]:
-            processed_ids.add(cid)
-            continue
-            
-        dur = int(c.get("CALL_DURATION") or 0)
-        phone = c.get("PHONE_NUMBER")
-        failed_code = str(c.get("CALL_FAILED_CODE") or "")
-        contact_id = c.get("CRM_ENTITY_ID") if c.get("CRM_ENTITY_TYPE") == "CONTACT" else None
-        deal_id = c.get("CRM_ENTITY_ID") if c.get("CRM_ENTITY_TYPE") == "DEAL" else None
+    elif current_stage == "UC_NDZ2":
+        call_b24("crm.deal.update", {
+            "id": did,
+            "fields": {"STAGE_ID": "UC_NDZ3"}
+        })
+        add_timeline_comment(did, f"🤖 Автопрозвон НДЗ: Повторный недозвон ({fail_reason}).\nСделка переведена: НДЗ 2 ➔ НДЗ 3.\nСледующий звонок не ранее чем через 2.5 часа (защита от спама).")
+        print(f"⏩ [НЕДОЗВОН 2 -> НДЗ 3] Сделка #{did} ({recruiter_name}) переведена в UC_NDZ3", flush=True)
 
-        found_deal = None
-        if deal_id:
-            d_res = call_b24("crm.deal.get", {"id": deal_id}).get("result")
-            if d_res: found_deal = d_res
-        elif contact_id:
-            d_list = call_b24("crm.deal.list", {
-                "filter": {"CONTACT_ID": contact_id},
-                "order": {"ID": "DESC"},
-                "select": ["ID", "TITLE", "STAGE_ID", "ASSIGNED_BY_ID"],
-                "limit": 1
-            }).get("result", [])
-            if d_list: found_deal = d_list[0]
+    elif current_stage == "UC_NDZ3":
+        add_timeline_comment(did, f"🤖 Автопрозвон НДЗ: Недозвон на стадии НДЗ 3 ({fail_reason}). Сделка ожидает закрытия в Неуспех в конце рабочего дня (18:00).")
+        print(f"ℹ️ [НЕДОЗВОН 3] Сделка #{did} ({recruiter_name}) остается в UC_NDZ3 до 18:00", flush=True)
 
-        if not found_deal:
-            processed_ids.add(cid)
+def check_pending_calls(state):
+    """
+    Проверяет результаты ТОЛЬКО ТЕХ звонков, которые были реально инициированы роботом
+    и сохранены в pending_calls. Никакие чужие или старые звонки с портала не затрагиваются!
+    """
+    pending = state.setdefault("pending_calls", {})
+    if not pending:
+        return
+
+    now_ts = time.time()
+    for session_id, info in list(pending.items()):
+        did = str(info["deal_id"])
+        phone = info["phone"]
+        user_id = info["user_id"]
+        start_ts = info.get("start_time", now_ts)
+        init_stage = info.get("initial_stage", "EXECUTING")
+        dtitle = info.get("title", f"Сделка #{did}")
+        elapsed = now_ts - start_ts
+
+        # Если прошло меньше 25 секунд — вызов еще гудит/идет, ждем
+        if elapsed < 25:
             continue
 
-        did = found_deal.get("ID")
-        current_stage = found_deal.get("STAGE_ID")
-        deal_owner = int(found_deal.get("ASSIGNED_BY_ID") or 0)
+        # Ищем завершенный вызов в Битрикс24 телефонии строго по номеру линии сценария и номеру кандидата
+        since_time = datetime.fromtimestamp(start_ts - 20, MSK_TZ).strftime("%Y-%m-%d %H:%M:%S")
+        res = call_b24("voximplant.statistic.get", {
+            "FILTER": {
+                "=PORTAL_NUMBER": "79677875304",
+                "=PHONE_NUMBER": phone,
+                ">CALL_START_DATE": since_time
+            },
+            "SORT": "CALL_START_DATE",
+            "ORDER": "DESC",
+            "LIMIT": 5
+        }).get("result", [])
 
-        if current_stage in ["EXECUTING", "UC_NDZ2", "UC_NDZ3"]:
-            recruiter_name = RECRUITERS.get(deal_owner, {}).get("name", f"ID {deal_owner}")
-            
-            # Переименовываем тему активности в Битрикс24
-            activity_id = c.get("CRM_ACTIVITY_ID")
+        finished_call = None
+        for c in res:
+            finished_call = c
+            break
+
+        recruiter_name = RECRUITERS.get(user_id, {}).get("name", f"ID {user_id}")
+
+        if finished_call:
+            dur = int(finished_call.get("CALL_DURATION") or 0)
+            failed_code = str(finished_call.get("CALL_FAILED_CODE") or "")
+            activity_id = finished_call.get("CRM_ACTIVITY_ID")
+
             if activity_id:
                 try:
                     call_b24("crm.activity.update", {
                         "id": activity_id,
-                        "fields": {"SUBJECT": f"Автопрозвон НДЗ: {phone}"}
+                        "fields": {"SUBJECT": f"Автопрозвон НДЗ: +{phone}"}
                     })
                 except Exception:
                     pass
 
-            called_today_info = state.get("called_today", {}).get(str(did), {})
-            was_busy_mode = bool(called_today_info.get("was_busy_mode"))
-
-            # Сценарий 0: Менеджер был занят в другом звонке (start.informer_call), и кандидат ВЗЯЛ трубку (код 200)!
-            if was_busy_mode and failed_code == "200":
-                stage_names = {"EXECUTING": "НДЗ 1", "UC_NDZ2": "НДЗ 2", "UC_NDZ3": "НДЗ 3"}
-                st_label = stage_names.get(current_stage, current_stage)
-                notify_recruiter_candidate_answered_while_busy(
-                    deal_owner, did, found_deal.get("TITLE", f"Сделка #{did}"), called_today_info.get("phone") or phone, st_label
-                )
-                processed_ids.add(cid)
+            candidate_pressed_1 = (failed_code == "200" and dur >= 7)
+            if candidate_pressed_1:
+                notify_candidate_pressed_one(user_id, did, dtitle, phone)
+                del pending[session_id]
+                save_state(state)
                 continue
 
-            is_short_or_answering_machine = (0 < dur <= 20)
+            fail_reason = f"сброс/не ответил ({dur}с, код {failed_code})"
+            advance_deal_stage(did, init_stage, recruiter_name, fail_reason)
+            del pending[session_id]
+            save_state(state)
 
-            # Сценарий 1: Недозвон (длительность = 0 сек, код сброса или короткий звонок/автоответчик <= 20 сек)
-            if dur == 0 or failed_code in ["304", "603", "486", "487", "404", "503"] or is_short_or_answering_machine:
-                ring_duration = 0
-                if not is_short_or_answering_machine and activity_id:
-                    act_res = call_b24("crm.activity.get", {"id": activity_id}).get("result", {})
-                    created_str = act_res.get("CREATED")
-                    updated_str = act_res.get("LAST_UPDATED")
-                    if created_str and updated_str:
-                        try:
-                            t_start = datetime.fromisoformat(created_str)
-                            t_end = datetime.fromisoformat(updated_str)
-                            ring_duration = int((t_end - t_start).total_seconds())
-                        except Exception:
-                            pass
-
-                # Защита для недозвонов без снятия трубки: гудки должны длиться не менее 30 секунд
-                if not is_short_or_answering_machine and ring_duration > 0 and ring_duration < 30:
-                    print(f"⏳ [НЕДОЗВОН ОТКЛОНЕН] Сделка #{did} ({recruiter_name}) — гудки длились {ring_duration} сек (< 30 сек). Стадия не трогается.", flush=True)
-                    add_timeline_comment(did, f"⏳ Автопрозвон НДЗ: Вызов длился {ring_duration} сек (< 30 сек).\nПо правилам недозвон засчитывается только при вызове от 30 секунд. Стадия сохранена.")
-                    processed_ids.add(cid)
-                    continue
-
-                fail_reason = f"автоответчик/сброс ({dur}с)" if is_short_or_answering_machine else f"{ring_duration or '30+'} сек гудков"
-
-                if current_stage == "EXECUTING":
-                    call_b24("crm.deal.update", {
-                        "id": did,
-                        "fields": {"STAGE_ID": "UC_NDZ2"}
-                    })
-                    add_timeline_comment(did, f"🤖 Автопрозвон НДЗ: Зафиксирован подтвержденный недозвон ({fail_reason}, код {failed_code}).\nСделка автоматически переведена: НДЗ 1 ➔ НДЗ 2.")
-                    print(f"⏩ [НЕДОЗВОН 1 -> НДЗ 2] Сделка #{did} ({recruiter_name}) переведена в UC_NDZ2 ({fail_reason})", flush=True)
-
-                elif current_stage == "UC_NDZ2":
-                    call_b24("crm.deal.update", {
-                        "id": did,
-                        "fields": {"STAGE_ID": "UC_NDZ3"}
-                    })
-                    add_timeline_comment(did, f"🤖 Автопрозвон НДЗ: Зафиксирован повторный подтвержденный недозвон ({fail_reason}, код {failed_code}).\nСделка автоматически переведена: НДЗ 2 ➔ НДЗ 3.")
-                    print(f"⏩ [НЕДОЗВОН 2 -> НДЗ 3] Сделка #{did} ({recruiter_name}) переведена в UC_NDZ3 ({fail_reason})", flush=True)
-
-                elif current_stage == "UC_NDZ3":
-                    call_b24("crm.deal.update", {
-                        "id": did,
-                        "fields": {
-                            "STAGE_ID": "LOSE",
-                            "UF_CRM_1768823747857": 218  # Не выходит на связь
-                        }
-                    })
-                    add_timeline_comment(did, f"🤖 Автопрозвон НДЗ: Зафиксирован последний недозвон на стадии НДЗ 3 ({fail_reason}, код {failed_code}).\nСделка автоматически закрыта в Неуспех с причиной «Не выходит на связь».")
-                    print(f"🔴 [НЕДОЗВОН 3 -> НЕУСПЕХ] Сделка #{did} ({recruiter_name}) закрыта в LOSE (Не выходит на связь)", flush=True)
-
-            # Сценарий 2: Полноценный разговор рекрутера с кандидатом (> 20 сек)
-            elif dur > 20:
-                called_today_info = state.get("called_today", {}).get(str(did), {})
-                if called_today_info.get("was_busy_mode"):
-                    stage_names = {"EXECUTING": "НДЗ 1", "UC_NDZ2": "НДЗ 2", "UC_NDZ3": "НДЗ 3"}
-                    st_label = stage_names.get(current_stage, current_stage)
-                    notify_recruiter_candidate_answered_while_busy(
-                        deal_owner, did, found_deal.get("TITLE", f"Сделка #{did}"), called_today_info.get("phone") or phone, st_label
-                    )
-                else:
-                    add_timeline_comment(did, f"📞 Автопрозвон НДЗ: Успешный разговор рекрутера с кандидатом (длительность {dur} сек).\nСтадия оставлена на ручное распределение рекрутером.")
-                    print(f"✅ [ДОЗВОН] Сделка #{did} ({recruiter_name}) — кандидат ответил ({dur} сек). Стадия не меняется роботом.", flush=True)
-
-        processed_ids.add(cid)
-
-    state["processed_call_ids"] = list(processed_ids)[-200:]
-    save_state(state)
+        elif elapsed > 180:
+            # Звонок старше 3 минут — гарантированный таймаут/сброс
+            fail_reason = "таймаут/не ответил (>3 мин)"
+            advance_deal_stage(did, init_stage, recruiter_name, fail_reason)
+            del pending[session_id]
+            save_state(state)
 
 def close_eod_ndz3_deals():
     """
@@ -458,7 +431,7 @@ def run_dialer_step():
         save_state(state)
 
     # Проверка результатов звонков и каскада стадий
-    check_recent_call_results(state)
+    check_pending_calls(state)
 
     # Проверка закрытия НДЗ 3 в 18:00
     close_eod_ndz3_deals()
@@ -534,6 +507,14 @@ def run_dialer_step():
                 "user_id": uid,
                 "phone": phone,
                 "was_busy_mode": is_manager_busy
+            }
+            state.setdefault("pending_calls", {})[str(session_id)] = {
+                "deal_id": did,
+                "phone": phone,
+                "user_id": uid,
+                "start_time": time.time(),
+                "initial_stage": stage,
+                "title": dtitle
             }
             save_state(state)
             if not is_manager_busy:
