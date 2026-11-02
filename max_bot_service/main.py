@@ -58,9 +58,10 @@ def get_api_keys() -> list:
     return keys
 
 MODELS_TO_TRY = [
-    "gemini-3-flash-preview",
-    "gemini-3.5-flash",
-    "gemini-3.1-flash-lite"
+    "gemini-flash-lite-latest",
+    "gemini-3.5-flash-lite",
+    "gemini-3.1-flash-lite",
+    "gemini-3.6-flash"
 ]
 
 # Распределение сделок между 3 менеджерами (Маргарита, Анастасия, Анна)
@@ -464,17 +465,13 @@ def call_gemini_llm(dialogue_transcript: str, user_message: str, cand_name: str 
     for api_key in keys_pool:
         for model_name in MODELS_TO_TRY:
             url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
-            gen_cfg = {
-                "temperature": 0.7,
-                "maxOutputTokens": 300
-            }
-            if "gemini-3" in model_name:
-                gen_cfg["thinkingConfig"] = {"thinkingBudget": 0}
-
             payload = {
                 "system_instruction": {"parts": [{"text": SYSTEM_PROMPT_ENTERPRISE_RECRUITER}]},
                 "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
-                "generationConfig": gen_cfg
+                "generationConfig": {
+                    "temperature": 0.7,
+                    "maxOutputTokens": 350
+                }
             }
 
             try:
@@ -483,7 +480,7 @@ def call_gemini_llm(dialogue_transcript: str, user_message: str, cand_name: str 
                     data=json.dumps(payload).encode("utf-8"),
                     headers={"Content-Type": "application/json"}
                 )
-                with urllib.request.urlopen(req, timeout=8, context=ctx) as resp:
+                with urllib.request.urlopen(req, timeout=12, context=ctx) as resp:
                     data = json.loads(resp.read().decode("utf-8"))
                     candidates = data.get("candidates", [])
                     if candidates:
@@ -492,17 +489,15 @@ def call_gemini_llm(dialogue_transcript: str, user_message: str, cand_name: str 
                             reply = parts[0]["text"].strip()
                             return sanitize_text(strip_name_greetings(reply))
             except urllib.error.HTTPError as he:
-                if he.code == 429:
-                    print(f"[GEMINI KEY 429] Переключение на следующий API-ключ...", flush=True)
-                    break # Переходим к следующему ключу
-                else:
-                    print(f"[GEMINI LLM {model_name} HTTP {he.code}]: {he}", flush=True)
+                print(f"[GEMINI LLM {model_name} HTTP {he.code}]: {he}", flush=True)
+                continue
             except Exception as e:
                 print(f"[GEMINI LLM {model_name} ERR]: {e}", flush=True)
+                continue
 
     return (
-        "Спасибо за сообщение! Служба безопасности наших производств согласовывает кандидатов "
-        "строго от 20 до 55 лет с гражданством РФ. Напишите, пожалуйста, ваш номер телефона для связи с координатором!"
+        "Здравствуйте! С радостью отвечу на все ваши вопросы по вакансиям и условиям работы на вахте. "
+        "Подскажите, какой объект вас больше интересует (Балашиха, Владимир, Кашира или СПБ) или напишите номер телефона для связи с координатором!"
     )
 
 
