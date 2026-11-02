@@ -667,17 +667,20 @@ def get_b24_deal(deal_id):
         print(f"[B24 GET DEAL ERROR]: {e}", flush=True)
         return None
 
-def create_b24_deal(name, phone, object_title="АБИ", chat_id=None):
+def create_b24_deal(name, phone, object_title="АБИ", chat_id=None, source_label="Официальный МАКС Бот"):
     global current_girl_idx
     manager_id = GIRLS_QUEUE[current_girl_idx % len(GIRLS_QUEUE)]
     current_girl_idx += 1
+
+    source_id = "MAX_BROADCAST" if ("broadcast" in source_label.lower() or "рассылк" in source_label.lower()) else "OTHER"
 
     try:
         c_url = f"{B24_WEBHOOK}crm.contact.add.json"
         c_payload = {
             "fields": {
                 "NAME": name or "Кандидат МАКС",
-                "PHONE": [{"VALUE": phone, "VALUE_TYPE": "WORK"}]
+                "PHONE": [{"VALUE": phone, "VALUE_TYPE": "WORK"}],
+                "SOURCE_ID": source_id
             }
         }
         req = urllib.request.Request(c_url, data=json.dumps(c_payload).encode('utf-8'), headers={"Content-Type": "application/json"})
@@ -692,19 +695,20 @@ def create_b24_deal(name, phone, object_title="АБИ", chat_id=None):
                 "STAGE_ID": "NEW",
                 "CONTACT_ID": cid,
                 "ASSIGNED_BY_ID": manager_id,
-                "SOURCE_ID": "OTHER",
-                "SOURCE_DESCRIPTION": f"Официальный МАКС Бот (@id9729371578_bot) | Chat ID: {chat_id} | Интерес: {object_title}"
+                "SOURCE_ID": source_id,
+                "SOURCE_DESCRIPTION": f"{source_label} (@id9729371578_bot) | Chat ID: {chat_id} | Интерес: {object_title}"
             }
         }
         req2 = urllib.request.Request(d_url, data=json.dumps(d_payload).encode('utf-8'), headers={"Content-Type": "application/json"})
         with urllib.request.urlopen(req2, timeout=10, context=ctx) as r2:
             did = json.loads(r2.read().decode('utf-8'))['result']
-        print(f"⭐ [B24 СДЕЛКА СОЗДАНА] #{did} для {name} ({phone}), Назначена: {manager_id}", flush=True)
+        print(f"⭐ [B24 СДЕЛКА СОЗДАНА] #{did} для {name} ({phone}), Источник: {source_id}, Назначена: {manager_id}", flush=True)
 
         # Обогащаем таймлайн сделки
         if did:
             comment = (
-                f"🤖 Новая заявка из официального бота МАКС (@id9729371578_bot)\n\n"
+                f"🤖 Новая заявка из МАКС бота (@id9729371578_bot)\n\n"
+                f"📢 Источник: {source_label}\n"
                 f"👤 Кандидат: {name}\n"
                 f"📞 Телефон: {phone}\n"
                 f"💬 Chat ID: {chat_id}\n"
@@ -826,11 +830,12 @@ def handle_single_update(up: dict):
             "spb": "Стандарт СПБ (склад оконного профиля, ставка 3 900 ₽, ежедневные выплаты)"
         }
 
-        if start_payload and is_first_start:
-            parts = start_payload.split("_", 1)
-            target_tag = parts[0].lower()
-            target_deal_id = parts[1] if len(parts) > 1 else ""
+        parts = start_payload.split("_", 1) if start_payload else []
+        target_tag = parts[0].lower() if parts else ""
+        target_deal_id = parts[1] if len(parts) > 1 and parts[1].isdigit() else ""
 
+        # 1. Сценарий для кандидатов из Авито ПОСЛЕ ЗВОНКА (deeplink содержит deal_id, например spb_97904)
+        if start_payload and target_deal_id and is_first_start:
             cand_name = name
             avito_ctx = ""
             phone_num = None
@@ -885,6 +890,10 @@ def handle_single_update(up: dict):
             send_message(chat_id, welcome_msg)
             save_chat_message(chat_id, "model", welcome_msg)
             return
+
+        if target_tag in ["sms", "broadcast", "promo"]:
+            update_user_state(chat_id, scenario="broadcast")
+            st["scenario"] = "broadcast"
 
         if is_first_start and not get_chat_history(chat_id, limit=2):
             welcome_msg = (
@@ -992,7 +1001,8 @@ def handle_single_update(up: dict):
         # -------------------------------------------------------------
         phone = extract_phone(text)
         if phone and not st.get("phone"):
-            did = create_b24_deal(name, phone, st.get("object", "АБИ"), chat_id=chat_id)
+            source_lbl = "СМС-рассылка МАКС" if st.get("scenario") == "broadcast" else "Официальный МАКС Бот"
+            did = create_b24_deal(name, phone, st.get("object", "АБИ"), chat_id=chat_id, source_label=source_lbl)
             update_user_state(chat_id, phone=phone, deal_id=did)
 
         # -------------------------------------------------------------
