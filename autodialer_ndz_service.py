@@ -383,6 +383,25 @@ def close_eod_ndz3_deals():
                 add_timeline_comment(did, "🤖 Автопрозвон НДЗ: Завершение рабочего дня в 18:00. После серии недозвонов сделка закрыта в Неуспех (Не выходит на связь).")
                 print(f"🔴 [18:00 ЗАКРЫТИЕ В LOSE] Сделка #{did} ({uinfo['name']}) -> Неуспех (Не выходит на связь)", flush=True)
 
+def is_manager_present(uid):
+    """
+    Проверяет, находится ли менеджер на рабочем месте:
+    1. Онлайн ли менеджер на портале Битрикс24 (user.online).
+    2. Не нажал ли менеджер «Перерыв» / «Отошел» (imopenlines.operator.pause.get).
+    Если менеджер отошел или оффлайн — звонки для него не совершаются!
+    """
+    try:
+        online_users = call_b24("user.online").get("result", [])
+        if str(uid) not in [str(x) for x in online_users]:
+            return False, "Оффлайн (не в сети Битрикс24)"
+        
+        pause_res = call_b24("imopenlines.operator.pause.get", {"USER_ID": uid}).get("result", False)
+        if pause_res:
+            return False, "На перерыве (статус 'Отошел' в Битрикс24)"
+    except Exception:
+        pass
+    return True, "На рабочем месте (онлайн)"
+
 def get_busy_uis_employees():
     """
     Запрашивает у UIS Call API (list.calls) список всех текущих активных звонков в реальном времени.
