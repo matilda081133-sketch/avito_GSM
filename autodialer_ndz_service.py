@@ -66,7 +66,7 @@ RECRUITERS = {
         "name": "Анна Боркина",
         "uis_employee_id": 10382998,
         "virtual_phone": "79860898198",
-        "active": False  # Пока выключено
+        "active": True   # ВКЛЮЧЕНО
     }
 }
 
