@@ -950,6 +950,8 @@ def generate_human_reply(cand_text: str, ad_title: str, cand_history_only: str =
     отвечает на вопросы и никогда не зацикливается как глупый робот.
     """
     t = cand_text.lower().strip()
+    if not profile:
+        profile = {}
     combined_cand = (cand_history_only + " \n " + cand_text).strip().lower()
     fac_key = detect_facility(ad_title + " " + combined_cand, vacancy_code=vacancy_code, description=ad_description)
     fac = FACILITIES.get(fac_key, FACILITIES["ABI"])
