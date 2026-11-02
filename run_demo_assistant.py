@@ -627,25 +627,21 @@ def find_b24_deal_for_chat(chat_id: str):
         pass
     return None
 
-def generate_max_invite_reply(facility_key: str = "ABI", deal_id: str = "", cand_name: str = "Валерия", already_sent: bool = False) -> str:
-    """Генерирует официальное приглашение в чат-бот МАКС с deeplink-меткой объекта и сделки."""
+def generate_max_invite_reply(facility_key: str = "ABI", deal_id: str = "", cand_name: str = "", already_sent: bool = False) -> str:
+    """Генерирует персональную ссылку на чат-бот МАКС строго после звонка и перевода сделки в стадию 'Запрос паспорта'."""
     link = get_max_bot_link(facility_key, deal_id)
-    name_str = f"{cand_name}, " if cand_name else ""
+    cand_disp = f"{cand_name}, " if (cand_name and cand_name.lower() not in ["пользователь", "авито", "клиент", "соискатель", "user", "id", "batya", "нет"]) else ""
     if already_sent:
         return (
-            f"{name_str}ссылка на наш официальный чат-бот в МАКС направлена выше:\n"
+            f"{cand_disp}персональная ссылка на наш официальный чат-бот в МАКС направлена выше:\n"
             f"👉 {link}\n\n"
-            f"Переходите по ней и нажмите «Начать» — бот сразу примет фото паспорта для пропуска на КПП завода и покупки билета за счет компании, а также подключит вас к чату с бригадиром!"
+            f"Перейдите по ссылке и нажмите «Старт» — бот сразу зафиксирует вашу бронь по согласованным условиям!"
         )
     return (
-        f"{name_str}отлично, что вы уже на связи с координатором! 🤝\n\n"
-        f"Чтобы завершить оформление, переходите в наш официальный чат-бот в МАКС:\n"
+        f"{cand_disp}спасибо за продуктивный разговор с нашим координатором! 🤝\n\n"
+        f"Как и договаривались, направляю вам персональную ссылку на наш официальный чат-бот в МАКС для бронирования даты выезда и электронного билета:\n"
         f"👉 {link}\n\n"
-        f"В МАКС мы сразу:\n"
-        f"1. Добавим вас в рабочий чат с бригадиром на объекте;\n"
-        f"2. Безопасно примем фото паспорта (разворот с фото и страницу прописки) — это нужно службе безопасности для заказа разового электронного пропуска на КПП завода и покупки билета за счет компании;\n"
-        f"3. Отправим вам электронный билет на поезд/автобус и памятку со схемой проезда и контактами встречи.\n\n"
-        f"Жмите на ссылку и отправьте боту «Начать» — он сразу всё зафиксирует!"
+        f"Перейдите по ссылке и нажмите «Старт» — бот сразу зафиксирует вашу бронь по согласованным условиям!"
     )
 
 def generate_direct_max_signup_reply(
@@ -978,7 +974,7 @@ def generate_human_reply(cand_text: str, ad_title: str, cand_history_only: str =
             cand_name=cand_first_name,
             dialogue_transcript=dialogue_transcript,
             profile=profile,
-            max_bot_link=max_bot_link,
+            max_bot_link="",  # Ссылку в МАКС в первичном диалоге не выдаем — только после звонка и перевода сделки в стадию 'Запрос паспорта'
             is_ready_to_sign_up=ready_to_sign_up,
             is_fully_qualified=fully_qualified,
             is_non_russian=is_non_rus,
@@ -1231,20 +1227,13 @@ def generate_human_reply(cand_text: str, ad_title: str, cand_history_only: str =
         return reply, False, ""
 
     # ПРЯМАЯ ВЫДАЧА ССЫЛКИ НА ЧАТ-БОТ В МАКС С МЕТКАМИ:
-    # 1. Если кандидат подходит по всем параметрам (пол, возраст до 45 лет, РФ, самозанятость, условия)
-    #    И прямо пишет о готовности записываться на смену прямо сейчас ("запишите меня", "готов записаться", "записываем брата", "когда выезжать"):
-    #    -> Можно обойтись БЕЗ ожидания звонка рекрутера и СРАЗУ выдать персональную ссылку в МАКС!
+    # 1. Если кандидат подходит по параметрам и готов записываться на смену прямо сейчас:
+    # Записываем контакты и передаем координатору (ссылку в МАКС робот отправит строго после звонка при переходе сделки в 'Запрос паспорта')
     if ready_to_sign_up and fully_qualified:
-        already_sent = "max.ru" in our_history
-        target_subj = profile.get("target_subject", "кандидат") if profile else "кандидат"
-        reply = generate_direct_max_signup_reply(
-            facility_key=fac_key,
-            deal_id=deal_id,
-            cand_name=cand_first_name,
-            target_subject=target_subj,
-            has_phone=has_phone,
-            already_sent=already_sent
-        )
+        if has_phone:
+            reply = f"{name_prefix}отлично, с радостью поможем с бронированием смены! Номер телефона ваш зафиксирован, передаю контакты нашему координатору — специалист свяжется с вами в ближайшее время, согласует все детали и забронирует место!"
+        else:
+            reply = f"{name_prefix}отлично, с радостью запишем вас на смену! На какой контактный номер телефона координатор может позвонить вам для подробной консультации и бронирования места?"
         return reply, False, ""
 
     # Кандидат от 46 до 55 лет: общаемся В ШТАТНОМ ПОРЯДКЕ (без акцента на возрасте и без ссылок в МАКС!)
@@ -1296,7 +1285,7 @@ def generate_human_reply(cand_text: str, ad_title: str, cand_history_only: str =
             cand_name=cand_first_name,
             dialogue_transcript=dialogue_transcript,
             profile=profile,
-            max_bot_link=max_bot_link,
+            max_bot_link="",  # Ссылку в МАКС в первичном диалоге не выдаем — только после звонка и перевода сделки в стадию 'Запрос паспорта'
             is_ready_to_sign_up=ready_to_sign_up,
             is_fully_qualified=fully_qualified,
             is_non_russian=is_non_rus,
@@ -1935,6 +1924,118 @@ def check_and_reply_valeria(user_id: int = None) -> bool:
         except Exception as e_cab:
             print(f"[{cab.get('name', c_id)}] Ошибка проверки кабинета: {e_cab}", flush=True)
     return replied_any
+
+def sync_passport_requests_to_avito(max_age_hours: float = 48.0) -> int:
+    """
+    Сканирует сделки Битрикс24 в стадии 'Запрос паспорта' (UC_REQ_PASSPORT).
+    Если координатор созвонился с кандидатом и перевел сделку в эту стадию,
+    робот автоматически формирует уникальную персональную ссылку на чат-бот МАКС
+    (с меткой объекта и ID сделки) и отправляет согласованное сообщение в диалог на Авито.
+    """
+    try:
+        from b24_sync import call_b24
+        from session_memory import (
+            is_passport_invite_sent,
+            record_passport_invite_sent,
+            get_session_profile_by_deal_id,
+            get_session_profile
+        )
+    except Exception as e_imp:
+        print(f"[SYNC PASSPORT ERR] Ошибка импорта: {e_imp}", flush=True)
+        return 0
+
+    sent_count = 0
+    now_ts = time.time()
+    cutoff_ts = now_ts - (max_age_hours * 3600.0)
+
+    try:
+        deals = call_b24('crm.deal.list', {
+            'filter': {'STAGE_ID': 'UC_REQ_PASSPORT'},
+            'select': ['ID', 'TITLE', 'STAGE_ID', 'CATEGORY_ID', 'UF_CRM_1770280572875', 'UF_CRM_1775470003043', 'COMMENTS', 'DATE_MODIFY'],
+            'order': {'DATE_MODIFY': 'DESC'},
+            'limit': 50
+        }).get('result', [])
+
+        for deal in deals:
+            deal_id = str(deal.get('ID') or '')
+            if not deal_id or is_passport_invite_sent(deal_id):
+                continue
+
+            # Фильтр свежести: проверяем DATE_MODIFY сделки, чтобы не писать по старым архивам
+            date_mod_str = str(deal.get('DATE_MODIFY') or '')
+            if date_mod_str:
+                try:
+                    mod_dt = datetime.datetime.fromisoformat(date_mod_str)
+                    if mod_dt.timestamp() < cutoff_ts:
+                        record_passport_invite_sent(deal_id, "", "ARCHIVE")
+                        continue
+                except Exception:
+                    pass
+
+            avito_url = str(deal.get('UF_CRM_1770280572875') or '').strip()
+            if not avito_url or 'u2i-' not in avito_url:
+                continue
+
+            chat_id = avito_url.split('/channel/')[-1].split('?')[0].split('/')[0].strip()
+            if not chat_id:
+                continue
+
+            cand_name = ""
+            prof = get_session_profile_by_deal_id(deal_id) or get_session_profile(chat_id)
+            if prof and prof.get('candidate_name'):
+                cand_name = prof.get('candidate_name')
+            if not cand_name:
+                title = str(deal.get('TITLE') or '')
+                clean_t = re.sub(r'\[[^\]]*\]', '', title).split('|')[0].strip()
+                t_parts = clean_t.split()
+                if t_parts and t_parts[0].isalpha():
+                    cand_name = t_parts[0]
+
+            vac_title = str(deal.get('UF_CRM_1775470003043') or '')
+            comments = str(deal.get('COMMENTS') or '')
+            fac_key = detect_facility(vac_title or (deal.get('TITLE') or ''), description=comments)
+
+            target_client = None
+            msgs = []
+            for cab_id, cab_cl in CABINET_CLIENTS.items():
+                try:
+                    res_msgs = cab_cl.get_chat_messages(chat_id, limit=5)
+                    if isinstance(res_msgs, list):
+                        target_client = cab_cl
+                        msgs = res_msgs
+                        break
+                except Exception:
+                    continue
+
+            if not target_client:
+                continue
+
+            has_max_sent = False
+            for m in msgs:
+                txt = m.get('content', {}).get('text', '')
+                if 'max.ru' in txt:
+                    has_max_sent = True
+                    break
+
+            if has_max_sent:
+                record_passport_invite_sent(deal_id, chat_id, fac_key)
+                continue
+
+            invite_text = generate_max_invite_reply(facility_key=fac_key, deal_id=deal_id, cand_name=cand_name)
+            try:
+                target_client.send_message(chat_id, invite_text)
+                target_client.mark_chat_as_read(chat_id)
+                record_passport_invite_sent(deal_id, chat_id, fac_key)
+                sent_count += 1
+                cab_label = getattr(target_client, 'cabinet_name', 'Авито')
+                print(f"\n[{datetime.datetime.now().strftime('%H:%M:%S')}] 🚀 [ЗАПРОС ПАСПОРТА] Персональная ссылка МАКС отправлена в чат {chat_id} [{cab_label}] для сделки #{deal_id} ({cand_name or 'Кандидат'}, объект: {fac_key})!", flush=True)
+            except Exception as e_send:
+                print(f"[SYNC PASSPORT SEND ERR] deal #{deal_id}: {e_send}", flush=True)
+
+    except Exception as e:
+        print(f"[SYNC PASSPORT GENERAL ERR]: {e}", flush=True)
+
+    return sent_count
 
 if __name__ == "__main__":
     print(f"\n🚀 AI-Рекрутер GSM Logistics запущен в режиме КАБИНЕТА 'Прямой работодатель' (ID: {AVITO_USER_ID})!", flush=True)

@@ -35,8 +35,23 @@ def init_session_db():
     conn.commit()
     conn.close()
 
+def init_sent_invites_table():
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS sent_passport_invites (
+        deal_id TEXT PRIMARY KEY,
+        chat_id TEXT,
+        facility_key TEXT,
+        sent_at INTEGER
+    )
+    """)
+    conn.commit()
+    conn.close()
+
 # Инициализируем БД при импорте
 init_session_db()
+init_sent_invites_table()
 
 def get_session_profile(chat_id: str) -> Dict[str, Any]:
     """Возвращает текущую анкету кандидата из SQLite."""
@@ -78,6 +93,36 @@ def get_session_profile(chat_id: str) -> Dict[str, Any]:
         "last_updated": row[11],
         "raw_metadata": row[12] or "{}"
     }
+
+def get_session_profile_by_deal_id(deal_id: str) -> Optional[Dict[str, Any]]:
+    """Поиск профиля кандидата по deal_id из Битрикс24."""
+    if not deal_id:
+        return None
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM candidate_profiles WHERE deal_id = ? ORDER BY last_updated DESC LIMIT 1", (str(deal_id),))
+        row = cur.fetchone()
+        conn.close()
+        if not row:
+            return None
+        return {
+            "chat_id": row[0],
+            "candidate_name": row[1] or "",
+            "target_subject": row[2] or "кандидат",
+            "age": row[3],
+            "has_rf_passport": bool(row[4]) if row[4] is not None else None,
+            "origin_city": row[5] or "",
+            "departure_date": row[6] or "",
+            "phone_number": row[7] or "",
+            "qualification_status": row[8] or "IN_PROGRESS",
+            "disqualification_reason": row[9] or "",
+            "deal_id": row[10] or "",
+            "last_updated": row[11],
+            "raw_metadata": row[12] or "{}"
+        }
+    except Exception:
+        return None
 
 def update_session_profile(chat_id: str = None, **kwargs) -> Dict[str, Any]:
     if chat_id is None:
@@ -123,3 +168,31 @@ def reset_session_profile(chat_id: str):
     cur.execute("DELETE FROM candidate_profiles WHERE chat_id = ?", (chat_id,))
     conn.commit()
     conn.close()
+
+def is_passport_invite_sent(deal_id: str) -> bool:
+    """Проверяет, отправлялась ли уже персональная ссылка в МАКС для данной сделки."""
+    if not deal_id:
+        return False
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+        cur.execute("SELECT 1 FROM sent_passport_invites WHERE deal_id = ?", (str(deal_id),))
+        row = cur.fetchone()
+        conn.close()
+        return bool(row)
+    except Exception:
+        return False
+
+def record_passport_invite_sent(deal_id: str, chat_id: str, facility_key: str):
+    """Фиксирует факт отправки персональной ссылки в МАКС соискателю."""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+        cur.execute("""
+        INSERT OR REPLACE INTO sent_passport_invites (deal_id, chat_id, facility_key, sent_at)
+        VALUES (?, ?, ?, ?)
+        """, (str(deal_id), str(chat_id), str(facility_key), int(time.time())))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"[RECORD INVITE ERROR]: {e}", flush=True)

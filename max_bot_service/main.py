@@ -229,6 +229,10 @@ def init_db():
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     """)
+    try:
+        cur.execute("ALTER TABLE bot_users ADD COLUMN avito_context TEXT")
+    except Exception:
+        pass
     conn.commit()
     conn.close()
 
@@ -314,7 +318,7 @@ def set_meta(key: str, value):
 def get_user_state(chat_id, user_id=None, name="Кандидат"):
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
-    cur.execute("SELECT scenario, step, selected_object, phone, has_main_page, has_reg_page, deal_id, name, last_mid FROM bot_users WHERE chat_id = ?", (chat_id,))
+    cur.execute("SELECT scenario, step, selected_object, phone, has_main_page, has_reg_page, deal_id, name, last_mid, avito_context FROM bot_users WHERE chat_id = ?", (chat_id,))
     row = cur.fetchone()
     if not row:
         cur.execute("""
@@ -325,13 +329,15 @@ def get_user_state(chat_id, user_id=None, name="Кандидат"):
         state = {
             "scenario": "organic", "step": "AWAITING_QUAL", "object": "abi",
             "phone": None, "has_main_page": 0, "has_reg_page": 0,
-            "deal_id": None, "name": name, "last_mid": None
+            "deal_id": None, "name": name, "last_mid": None,
+            "avito_context": ""
         }
     else:
         state = {
             "scenario": row[0], "step": row[1], "object": row[2],
             "phone": row[3], "has_main_page": row[4], "has_reg_page": row[5],
-            "deal_id": row[6], "name": row[7] or name, "last_mid": row[8]
+            "deal_id": row[6], "name": row[7] or name, "last_mid": row[8],
+            "avito_context": (row[9] if len(row) > 9 else "") or ""
         }
     conn.close()
     return state
@@ -626,6 +632,23 @@ def add_b24_timeline_comment(deal_id, comment_text):
         print(f"[B24 TIMELINE ERR]: {e}", flush=True)
 
 
+def get_b24_deal(deal_id):
+    if not deal_id or not B24_WEBHOOK:
+        return None
+    try:
+        url = B24_WEBHOOK.rstrip('/') + "/crm.deal.get"
+        req = urllib.request.Request(
+            url, 
+            data=json.dumps({"id": str(deal_id)}).encode("utf-8"), 
+            headers={"Content-Type": "application/json"}
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            return data.get("result")
+    except Exception as e:
+        print(f"[B24 GET DEAL ERROR]: {e}", flush=True)
+        return None
+
 def create_b24_deal(name, phone, object_title="АБИ", chat_id=None):
     global current_girl_idx
     manager_id = GIRLS_QUEUE[current_girl_idx % len(GIRLS_QUEUE)]
@@ -766,7 +789,85 @@ def handle_single_update(up: dict):
         # -------------------------------------------------------------
         # А. СТАРТОВОЕ МЕНЮ С КНОПКАМИ ДЛЯ НОВЫХ СОБЕСЕДНИКОВ (/start)
         # -------------------------------------------------------------
-        is_first_start = (u_type == "bot_started") or (text.lower() in ["/start", "старт", "начать", "меню"])
+        is_first_start = (u_type == "bot_started") or (text.lower() in ["/start", "старт", "начать", "меню"]) or text.startswith("/start ")
+
+        # Проверяем deeplink-параметр start={tag}_{deal_id} (например, /start abi_98010)
+        start_payload = ""
+        if text.startswith("/start "):
+            start_payload = text[7:].strip()
+        elif up.get("payload"):
+            start_payload = str(up.get("payload")).strip()
+        elif body.get("payload"):
+            start_payload = str(body.get("payload")).strip()
+
+        FACILITY_NAMES_MAP = {
+            "abi": "АБИ Владимир (мясокомбинат, ставка от 3 900 до 4 900 ₽)",
+            "tepofol": "Тепофол Кашира (завод утеплителя, ставка 3 800 – 4 300 ₽)",
+            "alfa": "Альфатехформ Климовск (производство флаконов, ставка 3 700 ₽, дневные смены)",
+            "smart": "Смарт Family Балашиха (склад зоотоваров Petshop)",
+            "spb": "Стандарт СПБ (склад оконного профиля, ставка 3 900 ₽, ежедневные выплаты)"
+        }
+
+        if start_payload and is_first_start:
+            parts = start_payload.split("_", 1)
+            target_tag = parts[0].lower()
+            target_deal_id = parts[1] if len(parts) > 1 else ""
+
+            cand_name = name
+            avito_ctx = ""
+            phone_num = None
+
+            # 1. Попытка достать профиль из session_memory (SQLite)
+            try:
+                import sys
+                sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+                from session_memory import get_session_profile_by_deal_id
+                prof = get_session_profile_by_deal_id(target_deal_id)
+                if prof:
+                    if prof.get("candidate_name"):
+                        cand_name = prof.get("candidate_name")
+                    phone_num = prof.get("phone_number")
+                    avito_ctx = f"Кандидат: {cand_name}, Возраст: {prof.get('age')}, Город: {prof.get('origin_city')}, Телефон: {phone_num}"
+            except Exception as e_prof:
+                print(f"[SESSION PROF ERR]: {e_prof}", flush=True)
+
+            # 2. Попытка загрузить историю сделки из Битрикс24
+            if target_deal_id:
+                deal_info = get_b24_deal(target_deal_id)
+                if deal_info:
+                    d_title = deal_info.get("TITLE", "")
+                    vac_title = deal_info.get("UF_CRM_1775470003043", "")
+                    d_comments = deal_info.get("COMMENTS", "")
+                    if cand_name in ["Кандидат", ""] or not cand_name:
+                        t_parts = d_title.split()
+                        if len(t_parts) > 1 and not t_parts[1].isdigit():
+                            cand_name = t_parts[1]
+                    avito_ctx = f"{avito_ctx}\nСделка #{target_deal_id}: {d_title}\nВакансия Авито: {vac_title}\n{d_comments}".strip()
+
+            fac_label = FACILITY_NAMES_MAP.get(target_tag, "АБИ Владимир")
+
+            # Сохраняем в базу состояние кандидата
+            update_user_state(
+                chat_id,
+                deal_id=int(target_deal_id) if target_deal_id.isdigit() else st.get("deal_id"),
+                object=target_tag,
+                name=cand_name,
+                phone=phone_num or st.get("phone"),
+                step="AWAITING_PASSPORT_MAIN",
+                avito_context=avito_ctx[:1500]
+            )
+
+            welcome_msg = (
+                f"Здравствуйте, {cand_name}! Рада приветствовать вас после звонка с нашим координатором. 🤝\n\n"
+                f"Мы зафиксировали вашу бронь на объект {fac_label}.\n\n"
+                f"Для оформления бесплатного электронного билета на поезд/автобус за счет компании и заказа пропуска на КПП, "
+                f"отправьте, пожалуйста, четкое фото 2-3 страницы паспорта (главный разворот с фотографией) сюда в чат.\n\n"
+                f"Служба заботы сразу проверит данные и согласует дату выезда!"
+            )
+            send_message(chat_id, welcome_msg)
+            save_chat_message(chat_id, "model", welcome_msg)
+            return
+
         if is_first_start and not get_chat_history(chat_id, limit=2):
             welcome_msg = (
                 "Здравствуйте! Рада приветствовать вас. Мы — прямой работодатель, предлагаем работу и вахту с бесплатным проживанием в чистых квартирах и питанием.\n\n"
@@ -881,16 +982,18 @@ def handle_single_update(up: dict):
         # -------------------------------------------------------------
         live_transcript = get_live_transcript(chat_id, count=10)
 
-        context_hint = ""
+        context_hint = f"Объект: {st.get('object', 'АБИ')}. "
         if phone:
             context_hint += f"Телефон кандидата: {phone}. "
         if st.get("deal_id"):
             context_hint += f"Сделка в CRM #{st.get('deal_id')}. "
+        if st.get("avito_context"):
+            context_hint += f"\nКОНТЕКСТ ДИАЛОГА ИЗ АВИТО:\n{st.get('avito_context')}\n"
 
         ai_reply = call_gemini_llm(
             dialogue_transcript=live_transcript,
             user_message=text,
-            cand_name=name,
+            cand_name=st.get("name", name),
             context_hint=context_hint
         )
 
