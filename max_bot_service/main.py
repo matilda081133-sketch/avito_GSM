@@ -924,11 +924,17 @@ def find_b24_deal_by_phone(phone: str):
 
 
 # ID закрытых рабочих чатов подбора объектов в МАКС
+# ID закрытых рабочих чатов подбора объектов в МАКС
+# Правило:
+# 1. АБИ Владимир - АБИ (-72039570639374)
+# 2. Тепофол Подбор - Тепофол (-75926237514254)
+# 3. ПОДБОР Альфатехформ - Альфатехформ (требуется добавление бота / ID)
+# 4. ЕЛЕНА ЖИЛИНА ПОДБОР - СМАРТ Family местные и вахта, СТАНДАРТ СПБ (-72008292324686)
 OBJECT_SELECTION_CHATS = {
     "abi": -72039570639374,       # Аби Владимир
     "tepofol": -75926237514254,   # Тепофол Подбор
-    "alfa": -72008292324686,      # ЕЛЕНА ЖИЛИНА ПОДБОР (Альфатехформ)
-    "smart": -72008292324686,     # ЕЛЕНА ЖИЛИНА ПОДБОР (Смарт Family Балашиха)
+    "alfa": None,                 # ПОДБОР Альфатехформ (СТРОГО НЕ отправлять в Елену Жилину!)
+    "smart": -72008292324686,     # ЕЛЕНА ЖИЛИНА ПОДБОР (Смарт Family местные и вахта)
     "spb": -72008292324686        # ЕЛЕНА ЖИЛИНА ПОДБОР (Стандарт СПБ)
 }
 
@@ -1031,14 +1037,41 @@ def dispatch_candidate_passport_submission(chat_id: int, st: dict, photo_url: st
         tomorrow = datetime.datetime.now() + datetime.timedelta(days=1)
         cand_date = f"{tomorrow.day}.{tomorrow.month:02d}"
 
-    summary_text = (
-        f"{header}\n"
-        f"{cand_fio}\n"
-        f"{age_str}\n"
-        f"СМЗ есть\n"
-        f"{cand_date}\n"
+    # 3. Определяем имя ответственного менеджера
+    mgr_name = ""
+    assigned_id = st.get("assigned_by_id")
+    if deal_id and not assigned_id:
+        try:
+            d_info = get_b24_deal(deal_id)
+            if d_info:
+                assigned_id = d_info.get("ASSIGNED_BY_ID")
+        except Exception:
+            pass
+
+    recruiter_map = {
+        "84822": "Анна",
+        "82166": "Елена",
+        "84802": "Маргарита",
+        "84824": "Наталья",
+        "84826": "Иван",
+        "84828": "Лилия",
+        "84830": "Валерия",
+        "84832": "Анастасия"
+    }
+    if str(assigned_id) in recruiter_map:
+        mgr_name = recruiter_map[str(assigned_id)]
+
+    summary_lines = [
+        f"{header}",
+        f"{cand_fio}",
+        f"{age_str}",
+        f"СМЗ есть",
+        f"{cand_date}",
         f"{cand_phone}"
-    )
+    ]
+    if mgr_name:
+        summary_lines.append(f"{mgr_name}")
+    summary_text = "\n".join(summary_lines)
 
     print(f"📋 [CANDIDATE SUMMARY BUILT for Chat {chat_id} / Object {target_tag}]:\n{summary_text}", flush=True)
 
