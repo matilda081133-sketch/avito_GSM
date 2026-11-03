@@ -268,12 +268,19 @@ def normalize_phone_for_uis(phone_raw):
         ph = '7' + ph
     return ph
 
+ALL_NDZ_STAGES = ["UC_NDZ2", "EXECUTING", "UC_NDZ3", "UC_REQ_PASSPORT"]
+_recruiter_stage_indices = {}
+
 def get_next_ndz_deal_for_recruiter(user_id, called_today):
     """
-    Выбирает самую свежую сделку менеджера из стадий НДЗ 1, 2, 3 (LIFO: ID DESC)
+    Выбирает сделку менеджера со справедливой ротацией стадий (Round-Robin).
+    Исключает голодание стадий НДЗ 2, НДЗ 3 и Запрос паспорта из-за большого числа новых откликов в НДЗ 1.
     Соблюдает строгую паузу 2.5 часа между повторными звонками одному кандидату.
     """
-    for st in ["EXECUTING", "UC_REQ_PASSPORT", "UC_NDZ2", "UC_NDZ3"]:
+    curr_idx = _recruiter_stage_indices.get(user_id, 0)
+    ordered_stages = [ALL_NDZ_STAGES[(curr_idx + i) % len(ALL_NDZ_STAGES)] for i in range(len(ALL_NDZ_STAGES))]
+
+    for st in ordered_stages:
         filt = {
             "ASSIGNED_BY_ID": user_id,
             "STAGE_ID": st
@@ -311,6 +318,9 @@ def get_next_ndz_deal_for_recruiter(user_id, called_today):
             if phone:
                 norm_ph = normalize_phone_for_uis(phone)
                 if len(norm_ph) == 11:
+                    # Сдвигаем индекс стадии для следующего звонка этого рекрутера
+                    st_pos = ALL_NDZ_STAGES.index(st)
+                    _recruiter_stage_indices[user_id] = (st_pos + 1) % len(ALL_NDZ_STAGES)
                     return d, norm_ph, st
     return None, None, None
 
