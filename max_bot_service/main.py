@@ -740,31 +740,7 @@ def send_message(chat_id, text, keyboard=None):
     if not chat_id or (isinstance(chat_id, int) and chat_id <= 0) or str(chat_id).startswith("-"):
         return None
 
-    # Жесткий дебаунс: защита от дублей (не чаще 1 сообщения раз в 4 секунды в один чат)
-    now = time.time()
-    with _chat_send_lock:
-        last_t = _recent_chat_sends.get(chat_id, 0)
-        if now - last_t < 4.0:
-            print(f"🛑 [DEBOUNCE BLOCKED] Попытка повторной отправки в чат {chat_id} через {now - last_t:.2f}с. Пропущено!", flush=True)
-            return None
-        _recent_chat_sends[chat_id] = now
-
-    # Межсерверная защита от дублей: если другой сервис на Render уже ответил в этот чат за последние 8 секунд
-    try:
-        check_url = f"{MAX_API_BASE}/messages?chat_id={chat_id}&count=1"
-        req_c = urllib.request.Request(check_url, headers={"Authorization": TOKEN})
-        with urllib.request.urlopen(req_c, timeout=3, context=ctx) as r_c:
-            last_msgs = json.loads(r_c.read().decode('utf-8')).get('messages', [])
-            if last_msgs:
-                last_m = last_msgs[0]
-                if last_m.get('sender', {}).get('is_bot'):
-                    raw_t = last_m.get('timestamp') or 0
-                    msg_ts = raw_t / 1000.0 if raw_t > 1e11 else float(raw_t)
-                    if now - msg_ts < 8.0:
-                        print(f"🛑 [CROSS-SERVER DEDUP] В чат {chat_id} уже ответил другой инстанс бота {now - msg_ts:.1f}с назад. Пропуск!", flush=True)
-                        return None
-    except Exception as e_check:
-        pass
+# Убрана искусственная 8-секундная блокировка — защита от дублей гарантируется уникальными mid в SQLite
 
     url = f"{MAX_API_BASE}/messages?chat_id={chat_id}"
     payload = {"text": text}
