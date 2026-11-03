@@ -350,8 +350,30 @@ def parse_and_enhance_deal(deal: dict) -> dict:
     # СТРОГИЙ ЗАПРЕТ: СТАДИИ РУКАМИ ДВИГАЮТ ТОЛЬКО РЕКРУТЕРЫ!
     # (автоматический перенос в стадию В работе полностью отключен)
 
-    # Привязка телефона к контакту ОТКЛЮЧЕНА:
-    # Интеграция с Wappi автоматически подтягивает номер кандидата к сделке и контакту!
+    # Автоматическое обогащение контакта телефоном при наличии номера
+    if phone:
+        try:
+            if contact_id:
+                c_res = call_b24("crm.contact.get", {"id": contact_id}).get("result", {})
+                c_phones = c_res.get("PHONE") or []
+                if not c_phones:
+                    call_b24("crm.contact.update", {"id": contact_id, "fields": {"PHONE": [{"VALUE": phone, "VALUE_TYPE": "WORK"}]}})
+            else:
+                clean_p = re.sub(r'\D', '', phone)[-10:]
+                dup_res = call_b24('crm.duplicate.findbycomm', {'type': 'PHONE', 'values': [phone, f"+7{clean_p}", f"8{clean_p}"]})
+                dup_result = dup_res.get('result')
+                found_cid = None
+                if isinstance(dup_result, dict):
+                    c_list = dup_result.get('CONTACT', [])
+                    if c_list:
+                        found_cid = c_list[0]
+                if not found_cid:
+                    c_res = call_b24('crm.contact.add', {'fields': {'NAME': name_clean or 'Кандидат', 'PHONE': [{'VALUE': phone, 'VALUE_TYPE': 'WORK'}]}})
+                    found_cid = c_res.get('result')
+                if found_cid:
+                    upd_fields['CONTACT_ID'] = found_cid
+        except Exception as e_c:
+            print(f"[ENHANCE] Ошибка привязки контакта: {e_c}")
 
     res = call_b24("crm.deal.update", {"id": did, "fields": upd_fields})
     return {"id": did, "title": new_title, "success": res.get("result", False)}
@@ -780,8 +802,31 @@ def sync_candidate_to_b24_deal(chat_id: str, cand_data: dict, is_disqualified: b
             except Exception:
                 pass
 
-        # Привязка телефона к контакту ОТКЛЮЧЕНА: номер подтягивает Wappi!
-        pass
+        # Привязка или обогащение контакта телефоном при получении номера из чата/отклика
+        if phone:
+            try:
+                target_cid = contact_id or current_deal.get('CONTACT_ID')
+                if target_cid:
+                    c_res = call_b24("crm.contact.get", {"id": target_cid}).get("result", {})
+                    c_phones = c_res.get("PHONE") or []
+                    if not c_phones:
+                        call_b24("crm.contact.update", {"id": target_cid, "fields": {"PHONE": [{"VALUE": phone, "VALUE_TYPE": "WORK"}]}})
+                else:
+                    clean_p = re.sub(r'\D', '', phone)[-10:]
+                    dup_res = call_b24('crm.duplicate.findbycomm', {'type': 'PHONE', 'values': [phone, f"+7{clean_p}", f"8{clean_p}"]})
+                    dup_result = dup_res.get('result')
+                    found_cid = None
+                    if isinstance(dup_result, dict):
+                        c_list = dup_result.get('CONTACT', [])
+                        if c_list:
+                            found_cid = c_list[0]
+                    if not found_cid:
+                        c_res = call_b24('crm.contact.add', {'fields': {'NAME': name or 'Кандидат', 'PHONE': [{'VALUE': phone, 'VALUE_TYPE': 'WORK'}]}})
+                        found_cid = c_res.get('result')
+                    if found_cid:
+                        call_b24('crm.deal.update', {'id': deal_id, 'fields': {'CONTACT_ID': found_cid}})
+            except Exception as e_cont:
+                print(f"[B24 SYNC] Ошибка связывания контакта с телефоном: {e_cont}")
 
         # Запись деталей в историю таймлайна сделки
         details_list = []

@@ -99,8 +99,13 @@ def call_uis_api(method, params=None):
 
 def is_working_hours():
     now = datetime.now(MSK_TZ)
-    if now.hour < 9:
-        return False, f"До начала рабочего дня (сейчас {now.strftime('%H:%M')} МСК, старт в 09:00)"
+    # Выходные дни: суббота (5) и воскресенье (6) - автопрозвон строго выключен
+    if now.weekday() >= 5:
+        day_name = "Суббота" if now.weekday() == 5 else "Воскресенье"
+        return False, f"Выходной день ({day_name}), автодозвон отключен"
+    # Рабочие часы: строго с 10:00 до 18:00 МСК
+    if now.hour < 10:
+        return False, f"До начала рабочего дня (сейчас {now.strftime('%H:%M')} МСК, старт строго в 10:00)"
     if now.hour >= 18:
         return False, f"После окончания рабочего дня (сейчас {now.strftime('%H:%M')} МСК, завершение в 18:00)"
     return True, "Рабочее время"
