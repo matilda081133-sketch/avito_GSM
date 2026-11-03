@@ -825,10 +825,44 @@ def extract_phone_number(text: str) -> str:
         return f"+7{m2.group(1)}{m2.group(2)}{m2.group(3)}{m2.group(4)}"
     return ""
 
+def extract_avito_card_details(msgs: list) -> dict:
+    """Извлекает из системных сообщений и плашек Авито параметры анкеты (возраст, гражданство, ФИО, телефон)."""
+    res = {}
+    for m in msgs:
+        txt = m.get('content', {}).get('text', '') if isinstance(m, dict) else str(m)
+        if not txt:
+            continue
+        # Возраст
+        m_age = re.search(r'Возраст\s*[\n\r—–\-]*\s*(\d{1,2})\s*(?:лет|год|года)?', txt, flags=re.IGNORECASE)
+        if m_age:
+            val = int(m_age.group(1))
+            if 14 <= val <= 85:
+                res['age'] = val
+        # Гражданство
+        m_cit = re.search(r'Гражданство\s*[\n\r—–\-]*\s*([^\n\r]+)', txt, flags=re.IGNORECASE)
+        if m_cit:
+            cit_val = m_cit.group(1).strip()
+            res['citizenship'] = cit_val
+            if any(w in cit_val.lower() for w in ['росси', 'рф', 'русск']):
+                res['has_rf_passport'] = True
+            else:
+                res['has_rf_passport'] = False
+        # ФИО
+        m_fio = re.search(r'ФИО\s*[\n\r—–\-]*\s*([^\n\r]+)', txt, flags=re.IGNORECASE)
+        if m_fio:
+            res['fio'] = m_fio.group(1).strip()
+    return res
+
 def extract_age(text: str) -> int:
     if not text:
         return 0
     t = text.lower().replace('\u00a0', ' ')
+    # Первым делом проверяем формат карточки Авито: Возраст — 60 лет
+    m_av = re.search(r'возраст\s*[\n\r—–\-]*\s*(\d{1,2})\s*(?:лет|год|года)?', t, flags=re.IGNORECASE)
+    if m_av:
+        val = int(m_av.group(1))
+        if 14 <= val <= 85:
+            return val
 
     # Игнорируем резюме и системные сообщения
     if '[системное сообщение]' in t or 'резюме' in t:
@@ -1013,15 +1047,39 @@ def generate_human_reply(cand_text: str, ad_title: str, cand_history_only: str =
 
             return llm_reply, is_disq, disq_reason
     except Exception as e_llm:
-        print(f"Fallback на скрипты из-за ошибки Gemini LLM: {e_llm}")
+        print(f"Ошибка вызова Gemini LLM: {e_llm}")
 
-        # Если номер уже есть и кандидат пишет подтверждение («договорились», «хорошо», «спасибо»)
+    # Если LLM временно недоступен — проверяем дисквалификацию по возрасту или не спамим шаблонами
+    cand_age = profile.get("age") or extract_age(combined_cand)
+    if cand_age and cand_age > 55:
+        return (
+            "Здравствуйте! Благодарим за интерес к нашей вакансии.\n\n"
+            "К сожалению, по регламенту службы безопасности производственных предприятий согласование пропуска возможно строго для кандидатов до 55 лет.\n\n"
+            "Искренне желаем вам успехов в поиске подходящей работы!",
+            True,
+            f"Возраст {cand_age} лет превышает 55"
+        )
+    elif cand_age and 0 < cand_age < 20:
+        return (
+            "Здравствуйте! Благодарим за отклик.\n\n"
+            "К сожалению, по правилам службы безопасности предприятий мы оформляем кандидатов строго с 20 лет.\n\n"
+            "Будем искренне рады видеть вас в нашей команде, как только вам исполнится 20 лет!",
+            True,
+            f"Возраст {cand_age} лет меньше 20"
+        )
+
+    # Если номер уже есть и кандидат пишет подтверждение («договорились», «хорошо», «спасибо»)
     has_phone = bool(profile.get("phone_number") if profile else False) or bool(extract_phone_number(our_history + " " + cand_history_only))
     if any(w in t for w in ["что ты несешь", "что вы несете", "мы же договорились", "ты гонишь", "какой отказ", "зачем отказ"]):
         return f"{name_prefix}прошу прощения, это была техническая задержка автоответа! Конечно же, мы обо всем договорились, номер уже у координатора. Звонок в силе, обязательно ожидайте!", False, ""
 
     if has_phone and any(w in t for w in ["договорились", "хорошо", "отлично", "жду", "спасибо", "ок", "поняла", "понятно", "ясно", "будем ждать"]):
         return f"{name_prefix}договорились, всё в силе! Контакты переданы нашему координатору, специалист скоро свяжется с вами для бронирования места и билета. Хорошего дня!", False, ""
+
+    # ВНИМАНИЕ: Если нейросеть недоступна или ожидает троттлинга — КАТЕГОРИЧЕСКИ НЕ СПАМИМ РЕГЕКС-ШАБЛОНАМИ!
+    # Возвращаем пустой ответ, чтобы ассистент подождал следующий цикл и ответил через Gemini LLM.
+    print(f"⏳ [LLM WAIT] Ожидание доступности нейросети для чата. Заготовленные regex-шаблоны заблокированы.")
+    return "", False, ""
 
     # =========================================================================
     # 0. ОПРЕДЕЛЕНИЕ СУБЪЕКТА: ПОДБОР ДЛЯ МУЖА / СЫНА / БРАТА / РОДСТВЕННИКА
@@ -1730,7 +1788,16 @@ def process_valeria_chat(chat_id: str, cand_name: str, item_title: str, msgs: li
     elif not is_neg_h and any(w in t_cand_lower for w in ["мужа", "мужу", "муж поедет", "для мужа"]):
         profile["target_subject"] = "муж"
 
-    age_found = extract_age(valeria_text)
+    # Извлекаем данные из карточки отклика Авито по всем сообщениям
+    card_info = extract_avito_card_details(active_msgs)
+    if card_info.get("age"):
+        profile["age"] = card_info["age"]
+    if card_info.get("has_rf_passport") is not None:
+        profile["has_rf_passport"] = card_info["has_rf_passport"]
+    if card_info.get("fio") and not profile.get("candidate_name"):
+        profile["candidate_name"] = card_info["fio"]
+
+    age_found = extract_age(valeria_text) or extract_age(" \n ".join(cand_msgs))
     if age_found:
         profile["age"] = age_found
 
@@ -1753,7 +1820,7 @@ def process_valeria_chat(chat_id: str, cand_name: str, item_title: str, msgs: li
     # Сообщения кандидата: строго автор != кабинет и автор != сотрудники/менеджер (Наталья)
     cand_msgs = [
         m.get('content', {}).get('text', '') for m in active_msgs 
-        if m.get('author_id') not in STAFF_USER_IDS and m.get('author_id') != active_user_id and m.get('author_id') != 0
+        if m.get('author_id') not in STAFF_USER_IDS and m.get('author_id') != active_user_id
     ]
     cand_history_only = " \n ".join(cand_msgs[:-1])
 
@@ -1797,6 +1864,26 @@ def process_valeria_chat(chat_id: str, cand_name: str, item_title: str, msgs: li
         fac_key = detect_facility(item_title, vacancy_code=vacancy_code, description=ad_description)
         intro_card = FACILITIES.get(fac_key, FACILITIES["ABI"])["intro"]
         reply_text = f"Договорились, начинаем с чистого листа!\n\n{intro_card}"
+
+    if not reply_text or not reply_text.strip():
+        print(f"⏳ Пропускаем отправку в чат {chat_id}: ожидание генерации нейросетью.")
+        return False
+
+    # ЗАЩИТА ОТ ДУБЛИРОВАНИЯ СООБЩЕНИЙ (ANTI-DUPLICATION)
+    if our_msgs:
+        last_sent = our_msgs[-1].strip().lower()
+        if reply_text.strip().lower() == last_sent:
+            print(f"⚠️ [ANTI-DUP] Блокировка отправки дублирующего сообщения в {chat_id}: {reply_text[:60]}...")
+            return False
+
+    # Защита от повторного вопроса о возрасте, если возраст уже известен
+    if ("сколько вам полных лет" in reply_text.lower() or "сколько вам лет" in reply_text.lower()):
+        if profile.get("age"):
+            print(f"⚠️ [ANTI-DUP] Возраст уже известен ({profile.get('age')}), отменяем повторный вопрос.")
+            return False
+        if any("сколько вам" in m.lower() for m in our_msgs[-2:]):
+            print(f"⚠️ [ANTI-DUP] Вопрос о возрасте уже задавался ранее в чате {chat_id}, не дублируем.")
+            return False
 
     print(f"🤖 ОТВЕТ АССИСТЕНТА:\n{reply_text}")
 

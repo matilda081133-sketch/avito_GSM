@@ -121,6 +121,22 @@ SYSTEM_PROMPT = """Ты — опытный, чуткий, внимательны
 """
 
 import base64
+import threading
+import time
+
+# Глобальный Rate Limiter: гарантирует паузу не менее 2.0 сек между вызовами Gemini API
+_RATE_LOCK = threading.Lock()
+_LAST_REQUEST_TS = 0.0
+_MIN_REQUEST_INTERVAL = 2.0
+
+def _wait_for_rate_limit():
+    global _LAST_REQUEST_TS
+    with _RATE_LOCK:
+        now = time.time()
+        elapsed = now - _LAST_REQUEST_TS
+        if elapsed < _MIN_REQUEST_INTERVAL:
+            time.sleep(_MIN_REQUEST_INTERVAL - elapsed)
+        _LAST_REQUEST_TS = time.time()
 
 # Многоуровневый пул валидных API-ключей Google Gemini (5 рабочих ключей)
 _KEYS_POOL = [
@@ -237,11 +253,31 @@ def generate_llm_reply(
         cit_str = "Да (подтверждено)" if profile.get('has_rf_passport') is True else ("Нет (не гражданин РФ)" if profile.get('has_rf_passport') is False else "Уточняется")
         city_str = profile.get("origin_city") or "Уточняется"
         phone_str = profile.get("phone_number") or "Не указан (нужно запросить для брони)"
+        # Проверка возраста и жесткие указания для LLM
+        age_val = profile.get("age")
+        if age_val:
+            if age_val > 55:
+                age_instruction = f"{age_val} лет (ВНИМАНИЕ: ВОЗРАСТ {age_val} ЛЕТ ПРЕВЫШАЕТ 55 ЛЕТ! КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО СПРАШИВАТЬ ВОЗРАСТ! ПО РЕГЛАМЕНТУ СБ СТРОГО ВЕЖЛИВЫЙ ОТКАЗ: на данном объекте согласование возможно строго до 55 лет, пожелать успехов в поиске работы!)"
+            elif age_val < 20:
+                age_instruction = f"{age_val} лет (ВНИМАНИЕ: ВОЗРАСТ {age_val} ЛЕТ МЕНЬШЕ 20 ЛЕТ! ПО РЕГЛАМЕНТУ СБ СТРОГО ВЕЖЛИВЫЙ ОТКАЗ: согласование строго с 20 лет, пожелать удачи!)"
+            else:
+                age_instruction = f"{age_val} лет (УЖЕ ИЗВЕСТЕН ИЗ АВИТО! КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО СПРАШИВАТЬ ВОЗРАСТ ИЛИ ПЕРЕСПРАШИВАТЬ ЕГО!)"
+        else:
+            age_instruction = "не указан (уточни возраст, если он не указан в истории выше)"
+
+        cit_val = profile.get("has_rf_passport")
+        if cit_val is True:
+            cit_instruction = "подтверждено (паспорт РФ на руках, УЖЕ ИЗВЕСТНО! КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО СПРАШИВАТЬ ПРО ГРАЖДАНСТВО ИЛИ ПАСПОРТ!)"
+        elif cit_val is False:
+            cit_instruction = "не РФ (строго вежливый отказ по регламенту СБ)"
+        else:
+            cit_instruction = "не указано"
+
         profile_block = (
             f"СТРУКТУРИРОВАННАЯ КАРТОЧКА КАНДИДАТА (SESSION PROFILE):\n"
             f"• ДЛЯ КОГО ИЩЕТ РАБОТУ: {subj} (СТРОГО! Никогда не путай и не называй другим лицом!)\n"
-            f"• ВОЗРАСТ: {age_str}\n"
-            f"• ГРАЖДАНСТВО РФ: {cit_str}\n"
+            f"• ВОЗРАСТ: {age_instruction}\n"
+            f"• ГРАЖДАНСТВО РФ: {cit_instruction}\n"
             f"• ГОРОД ВЫЕЗДА: {city_str}\n"
             f"• КОНТАКТНЫЙ ТЕЛЕФОН: {phone_str}\n\n"
         )
@@ -276,23 +312,23 @@ def generate_llm_reply(
 
     models_to_try = [
         "gemini-flash-lite-latest",
-        "gemini-3.5-flash-lite",
-        "gemini-3.1-flash-lite",
-        "gemini-3.6-flash",
-        "gemini-3-flash-preview",
-        "gemini-flash-latest"
+        "gemini-flash-latest",
+        "gemini-3.8-flash",
+        "gemini-3.5-flash-lite"
     ]
 
     for api_key in keys_pool:
+        key_exhausted = False
         for m in models_to_try:
+            if key_exhausted:
+                break
             url = f"https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent?key={api_key}"
             # We try zero thinking budget first so response comes back in < 1s without burning output tokens on internal CoT
             configs_to_try = [
                 {"temperature": 0.7, "maxOutputTokens": 600, "thinkingConfig": {"thinkingBudget": 0}},
                 {"temperature": 0.7, "maxOutputTokens": 600}
             ]
-
-            success_key = False
+            
             for gen_cfg in configs_to_try:
                 payload = {
                     "system_instruction": {
@@ -307,6 +343,7 @@ def generate_llm_reply(
                     "generationConfig": gen_cfg
                 }
                 try:
+                    _wait_for_rate_limit()
                     resp = requests.post(url, json=payload, timeout=18)
                     if resp.status_code == 200:
                         data = resp.json()
@@ -315,27 +352,24 @@ def generate_llm_reply(
                             parts = candidates[0].get("content", {}).get("parts", [])
                             if parts and "text" in parts[0]:
                                 reply = parts[0]["text"].strip()
-                                # Safety filter
-                                if "фото паспорта" in reply.lower() and ("пришлите" in reply.lower() or "скиньте" in reply.lower()):
-                                    reply = reply.replace("фото паспорта", "подтверждение гражданства РФ")
                                 if len(reply) > 550:
                                     dot_idx = reply[:550].rfind(".")
                                     if dot_idx > 100:
                                         reply = reply[:dot_idx + 1]
-                                else:
-                                    reply = reply[:550]
+                                    else:
+                                        reply = reply[:550]
                                 return strip_name_greetings(reply)
                     elif resp.status_code == 400 and "thinkingConfig" in gen_cfg:
                         # Model might not support thinkingConfig, retry without it
                         continue
                     elif resp.status_code == 429:
-                        logger.warning(f"Key {api_key[:8]}... hit 429 on {m}. Rotating to next key in pool...")
-                        break  # Break inner configs and models to jump to next key
+                        logger.warning(f"Key {api_key[:8]}... hit 429. Rotating to next key in pool...")
+                        key_exhausted = True
+                        break  # Break config loop
                     else:
                         logger.warning(f"Model {m} returned {resp.status_code}: {resp.text[:100]}")
                         break
                 except Exception as e:
                     logger.warning(f"Model {m} request failed: {e}")
                     break
-
     return None
