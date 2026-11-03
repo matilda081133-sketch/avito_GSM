@@ -77,13 +77,12 @@ DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bot_state.db
 _chat_send_lock = threading.Lock()
 _recent_chat_sends = {}
 
-# Интерактивные кнопки 5 флагманских объектов
+# Интерактивные кнопки 4 флагманских вахтовых объектов (строго с бесплатным проживанием)
 KEYBOARD_OBJECTS = [
     [{"type": "callback", "text": "1. 🥩 Владимир (АБИ) до 4 900 ₽", "payload": "Расскажите про АБИ во Владимире"}],
     [{"type": "callback", "text": "2. 🏭 Кашира (Тепофол) 3 800 ₽", "payload": "Расскажите про Тепофол в Кашире"}],
     [{"type": "callback", "text": "3. 🧴 Подольск (Альфатехформ) 3 700 ₽", "payload": "Расскажите про Альфатехформ в Подольске"}],
-    [{"type": "callback", "text": "4. 🐶 Балашиха (Зоотовары) от 3 600 ₽", "payload": "Расскажите про зоотовары в Балашихе"}],
-    [{"type": "callback", "text": "5. 🚛 Санкт-Петербург (Стандарт) до 4 600 ₽", "payload": "Расскажите про Стандарт в СПБ"}]
+    [{"type": "callback", "text": "4. 🐶 Балашиха (Зоотовары) от 3 600 ₽", "payload": "Расскажите про зоотовары в Балашихе"}]
 ]
 
 # -------------------------------------------------------------
@@ -1040,19 +1039,29 @@ def handle_single_update(up: dict):
         payload = cb.get("payload") or ""
         sender = cb.get("user") or {}
         user_id = sender.get("user_id")
-        chat_id = up.get("chat_id") or user_id
-        name = sender.get("name") or "Кандидат"
+        name = sender.get("name") or f"{sender.get('first_name', '')} {sender.get('last_name', '')}".strip() or "Кандидат"
 
-        # Преобразуем callback в текстовое сообщение кандидата
-        up = {
+        # Извлекаем правильный chat_id диалога из исходного сообщения
+        orig_msg = up.get("message", {})
+        rec = orig_msg.get("recipient", {})
+        chat_id = rec.get("chat_id") or up.get("chat_id") or user_id
+
+        print(f"🔘 [CALLBACK CLICKED] User {name} (User ID {user_id}, Chat ID {chat_id}): '{payload}'", flush=True)
+
+        # Преобразуем callback в текстовое сообщение кандидата с корректным chat_id и sender
+        synthetic_up = {
             "update_type": "message_created",
             "message": {
-                "sender": sender,
+                "sender": {
+                    "user_id": user_id,
+                    "name": name,
+                    "is_bot": False
+                },
                 "recipient": {"chat_type": "dialog", "chat_id": chat_id, "user_id": user_id},
                 "body": {"mid": f"cb_{int(time.time()*1000)}", "text": payload}
             }
         }
-        return handle_single_update(up)
+        return handle_single_update(synthetic_up)
 
     # =========================================================
     # 1. ОБРАБОТКА ВХОДЯЩЕГО СООБЩЕНИЯ ИЛИ ФОТО
