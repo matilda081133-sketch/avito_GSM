@@ -1649,9 +1649,8 @@ def process_valeria_chat(chat_id: str, cand_name: str, item_title: str, msgs: li
         return False
     last_msg = msgs_clean[-1]
 
-    # Защита от архивных чатов: не отвечать на сообщения старше 4 часов (14400 сек)
-    last_msg_ts = last_msg.get('created', 0)
-    if last_msg_ts > 0 and (time.time() - last_msg_ts > 14400):
+    # Если последнее сообщение отправлено сотрудником/менеджером (Натальей) — ожидаем ответ соискателя
+    if last_msg.get('author_id') in STAFF_USER_IDS:
         return False
     deal = find_b24_deal_for_chat(chat_id)
     deal_id = str(deal.get("ID", "")) if deal else ""
@@ -1750,17 +1749,31 @@ def process_valeria_chat(chat_id: str, cand_name: str, item_title: str, msgs: li
     # Сохраняем обновленный профиль сессии
     update_session_profile(**profile)
 
-    # Историю кандидата и историю бота берем строго из АКТИВНОЙ сессии
-    cand_msgs = [m.get('content', {}).get('text', '') for m in active_msgs if m.get('author_id') != active_user_id and m.get('author_id') != 0]
+    # Историю кандидата и историю бота/менеджера берем строго из АКТИВНОЙ сессии
+    # Сообщения кандидата: строго автор != кабинет и автор != сотрудники/менеджер (Наталья)
+    cand_msgs = [
+        m.get('content', {}).get('text', '') for m in active_msgs 
+        if m.get('author_id') not in STAFF_USER_IDS and m.get('author_id') != active_user_id and m.get('author_id') != 0
+    ]
     cand_history_only = " \n ".join(cand_msgs[:-1])
 
-    our_msgs = [m.get('content', {}).get('text', '') for m in active_msgs if m.get('author_id') == active_user_id]
+    # Ответы со стороны компании (ассистент + живой менеджер Наталья)
+    our_msgs = [
+        m.get('content', {}).get('text', '') for m in active_msgs 
+        if m.get('author_id') == active_user_id or m.get('author_id') in STAFF_USER_IDS
+    ]
     our_history = " \n ".join(our_msgs)
 
     transcript_lines = []
-    # Используем скользящее окно последних 8 сообщений, чтобы не перегружать контекст и отвечать за 2-3 секунды
-    for m in active_msgs[-8:]:
-        auth = 'Ассистент' if m.get('author_id') == active_user_id else (cand_name or 'Кандидат')
+    # Полный контекст последних 10 сообщений с точным разграничением ролей
+    for m in active_msgs[-10:]:
+        auth_id = m.get('author_id')
+        if auth_id == active_user_id:
+            auth = 'Ассистент компании'
+        elif auth_id == 272766174 or auth_id in STAFF_USER_IDS:
+            auth = 'Менеджер Наталья'
+        else:
+            auth = 'Кандидат'
         txt_m = m.get('content', {}).get('text', '').strip()
         if txt_m:
             transcript_lines.append(f"{auth}: {txt_m}")
@@ -1866,11 +1879,7 @@ def check_and_reply_cabinet(cab_client: AvitoClient, cab_user_id: int, cab_name:
             if last_author in STAFF_USER_IDS or last_author == cab_user_id:
                 continue
 
-            # Защита от архивных чатов: обрабатываем активные входящие сообщения за последние 4 часа (14400 сек)
-            msg_created = last_msg_meta.get('created', 0)
-            now_ts = time.time()
-            if msg_created > 0 and (now_ts - msg_created > 14400):  # 4 часа
-                continue
+
 
             users = c.get('users', [])
             cand_name = ""
