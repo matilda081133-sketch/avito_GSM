@@ -259,8 +259,8 @@ async def avito_webhook(request: Request):
         text_content = payload.get("content", {}).get("text", "")
         author_id = payload.get("author_id")
 
-        if not chat_id or not text_content:
-            return {"status": "ignored", "reason": "empty"}
+        if not chat_id:
+            return {"status": "ignored", "reason": "empty_chat_id"}
 
         known_cabinets = {c["id"]: c for c in AVITO_CABINETS}
         STAFF_USER_IDS = {272766174, 358201685, 358202810, 438887068, 438376151, AVITO_USER_ID}
@@ -358,7 +358,7 @@ def run_avito_poller_thread():
                         sync_passport_requests_to_avito()
                     if poll_count % 15 == 0:
                         print(f"[CLOUD AVITO] Мониторинг всех {len(AVITO_CABINETS)} кабинетов активен (циклов: {poll_count}).", flush=True)
-                    time.sleep(12)
+                    time.sleep(3)
                 except Exception as e:
                     print(f"[CLOUD AVITO POLLER ERROR] {e}", flush=True)
                     time.sleep(10)
