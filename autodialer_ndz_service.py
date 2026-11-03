@@ -133,37 +133,69 @@ def add_timeline_comment(entity_id, comment_text, entity_type="deal"):
     except Exception as e:
         print(f"Ошибка добавления комментария в таймлайн сделки {entity_id}: {e}", flush=True)
 
-def notify_candidate_pressed_one(user_id, deal_id, deal_title, phone, initial_stage="EXECUTING"):
+def notify_candidate_pressed_one(user_id, deal_id, deal_title, phone, initial_stage="EXECUTING", manager_in_line=True):
     """
     Отправляет персональное уведомление в колокольчик менеджеру в Битрикс24
-    когда кандидат в автопрозвоне взял трубку и нажал 1 (подтвердил актуальность поиска работы).
+    когда кандидат в автопрозвоне взял трубку / подтвердил актуальность.
+    СТРОГО ответственному менеджеру по сделке!
     """
     deal_url = f"https://b24-4qx38o.bitrix24.ru/crm/deal/details/{deal_id}/"
+    recruiter_name = RECRUITERS.get(int(user_id), {}).get("name", f"ID {user_id}")
+
     if initial_stage == "UC_REQ_PASSPORT":
-        notify_msg = (
-            f"🔥 [B]Автопрозвон (Запрос паспорта): Кандидат подтвердил актуальность (нажал 1)![/B]\n"
-            f"Сделка #{deal_id}: {deal_title}\n"
-            f"Телефон: +{phone}\n"
-            f"Кандидат прямо сейчас на связи! Запросите паспорт и согласуйте дату выезда:\n"
-            f"👉 [URL={deal_url}]Открыть сделку #{deal_id}[/URL]"
-        )
-        timeline_msg = (
-            f"🔥 [B]Автопрозвон (Запрос паспорта):[/B] Кандидат +{phone} взял трубку и подтвердил актуальность (нажал 1).\n"
-            f"Стадия «Запрос паспорта» сохранена (ручной перенос рекрутером).\n"
-            f"Ответственному менеджеру отправлено персональное уведомление перезвонить прямо сейчас."
-        )
+        if not manager_in_line:
+            notify_msg = (
+                f"🔔 [B]Кандидат появился в сети! Нужно позвонить из стадии «Запрос паспорта»[/B]\n"
+                f"Сделка #{deal_id}: {deal_title}\n"
+                f"Телефон: +{phone}\n"
+                f"Кандидат прямо сейчас ответил на звонок (появился в сети)! Так как вы сейчас не в линии / в другом звонке, робот не стал переводить вызов.\n"
+                f"👉 Срочно перезвоните кандидату и запросите паспорт:\n"
+                f"[URL={deal_url}]Открыть сделку #{deal_id}[/URL]"
+            )
+            timeline_msg = (
+                f"🔔 [B]Автопрозвон (Запрос паспорта):[/B] Кандидат +{phone} появился в сети (ответил на звонок).\n"
+                f"Ответственный менеджер ({recruiter_name}) в этот момент был не в линии.\n"
+                f"Стадия «Запрос паспорта» сохранена. Менеджеру отправлено персональное уведомление срочно перезвонить."
+            )
+        else:
+            notify_msg = (
+                f"🔥 [B]Автопрозвон (Запрос паспорта): Кандидат подтвердил актуальность (нажал 1)![/B]\n"
+                f"Сделка #{deal_id}: {deal_title}\n"
+                f"Телефон: +{phone}\n"
+                f"Кандидат прямо сейчас на связи! Запросите паспорт и согласуйте дату выезда:\n"
+                f"👉 [URL={deal_url}]Открыть сделку #{deal_id}[/URL]"
+            )
+            timeline_msg = (
+                f"🔥 [B]Автопрозвон (Запрос паспорта):[/B] Кандидат +{phone} взял трубку и подтвердил актуальность (нажал 1).\n"
+                f"Стадия «Запрос паспорта» сохранена (ручной перенос рекрутером).\n"
+                f"Ответственному менеджеру отправлено персональное уведомление перезвонить прямо сейчас."
+            )
     else:
-        notify_msg = (
-            f"🔥 [B]Автопрозвон: Кандидат подтвердил актуальность (нажал 1)![/B]\n"
-            f"Сделка #{deal_id}: {deal_title}\n"
-            f"Телефон: +{phone}\n"
-            f"Кандидат прямо сейчас на связи! Срочно перезвоните ему:\n"
-            f"👉 [URL={deal_url}]Открыть сделку #{deal_id}[/URL]"
-        )
-        timeline_msg = (
-            f"🔥 [B]Автопрозвон НДЗ:[/B] Кандидат +{phone} взял трубку и подтвердил актуальность поиска работы (нажал 1).\n"
-            f"Ответственному менеджеру отправлено персональное уведомление перезвонить прямо сейчас."
-        )
+        if not manager_in_line:
+            notify_msg = (
+                f"🔔 [B]Кандидат появился в сети (взял трубку)![/B]\n"
+                f"Сделка #{deal_id}: {deal_title}\n"
+                f"Телефон: +{phone}\n"
+                f"Кандидат ответил на автодозвон, пока вы были не в линии / в другом разговоре.\n"
+                f"👉 Перезвоните кандидату: [URL={deal_url}]Открыть сделку #{deal_id}[/URL]"
+            )
+            timeline_msg = (
+                f"🔔 [B]Автопрозвон НДЗ:[/B] Кандидат +{phone} взял трубку, пока менеджер был не в линии.\n"
+                f"Менеджеру отправлено уведомление перезвонить кандидату."
+            )
+        else:
+            notify_msg = (
+                f"🔥 [B]Автопрозвон: Кандидат подтвердил актуальность (нажал 1)![/B]\n"
+                f"Сделка #{deal_id}: {deal_title}\n"
+                f"Телефон: +{phone}\n"
+                f"Кандидат прямо сейчас на связи! Срочно перезвоните ему:\n"
+                f"👉 [URL={deal_url}]Открыть сделку #{deal_id}[/URL]"
+            )
+            timeline_msg = (
+                f"🔥 [B]Автопрозвон НДЗ:[/B] Кандидат +{phone} взял трубку и подтвердил актуальность поиска работы (нажал 1).\n"
+                f"Ответственному менеджеру отправлено персональное уведомление перезвонить прямо сейчас."
+            )
+
     try:
         requests.post(f"{B24_NOTIFY_WEBHOOK_URL}im.notify.system.add", json={
             "USER_ID": int(user_id),
@@ -173,7 +205,7 @@ def notify_candidate_pressed_one(user_id, deal_id, deal_title, phone, initial_st
         print(f"Ошибка отправки колокольчика менеджеру {user_id}: {e}", flush=True)
 
     add_timeline_comment(deal_id, timeline_msg)
-    print(f"🔥 [КАНДИДАТ НАЖАЛ 1] Сделка #{deal_id} (+{phone}) [{initial_stage}] — менеджеру {user_id} отправлено уведомление!", flush=True)
+    print(f"🔥 [УВЕДОМЛЕНИЕ МЕНЕДЖЕРУ] Сделка #{deal_id} (+{phone}) [{initial_stage}] (in_line={manager_in_line}) — менеджеру {user_id} отправлено уведомление!", flush=True)
 
 def notify_recruiter_candidate_answered_while_busy(user_id, deal_id, deal_title, phone, stage_label):
     """
@@ -355,9 +387,17 @@ def check_pending_calls(state):
                 except Exception:
                     pass
 
-            candidate_pressed_1 = (failed_code == "200" and dur >= 7)
-            if candidate_pressed_1:
-                notify_candidate_pressed_one(user_id, did, dtitle, phone, initial_stage=init_stage)
+            # Проверяем, находится ли ответственный менеджер прямо сейчас в линии (онлайн и не в другом звонке)
+            busy_emp_ids, busy_virt_phones = get_busy_uis_employees()
+            is_online, _ = is_manager_present(user_id)
+            uinfo = RECRUITERS.get(user_id, {})
+            is_manager_busy_now = (uinfo.get("uis_employee_id") in busy_emp_ids) or (uinfo.get("virtual_phone") in busy_virt_phones)
+            manager_in_line = is_online and not is_manager_busy_now
+
+            # Кандидат взял трубку (для стадии «Запрос паспорта» достаточно факта успешного ответа dur >= 3)
+            candidate_answered = (failed_code == "200" and dur >= 7) or (init_stage == "UC_REQ_PASSPORT" and failed_code == "200" and dur >= 3)
+            if candidate_answered:
+                notify_candidate_pressed_one(user_id, did, dtitle, phone, initial_stage=init_stage, manager_in_line=manager_in_line)
                 del pending[session_id]
                 save_state(state)
                 continue
@@ -512,7 +552,8 @@ def run_dialer_step():
 
         is_manager_busy = (emp_id in busy_emp_ids) or (virt_phone in busy_virt_phones)
 
-        if is_manager_busy:
+        # Для стадий НДЗ ждем освобождения менеджера, а для «Запрос паспорта» разрешаем прозвон для выявления кандидата в сети
+        if is_manager_busy and stage != "UC_REQ_PASSPORT":
             print(f"⏳ [МЕНЕДЖЕР В ЗВОНКЕ] {uname} сейчас на линии. Ожидаем завершения разговора перед звонком кандидату +{phone} (Сделка #{did})...", flush=True)
             continue
 
