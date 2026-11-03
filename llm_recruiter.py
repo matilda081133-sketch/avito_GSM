@@ -140,8 +140,9 @@ def _wait_for_rate_limit():
 
 # Многоуровневый пул валидных API-ключей Google Gemini (5 рабочих ключей)
 _KEYS_POOL = [
-    base64.b64decode("QVEuQWI4Uk42SnpIRm1URXI3dEZVVW1CRDQ0OVlibVplaXB5ejl4ZW5qa0x0Y3E3YXNVdkE=").decode('utf-8'),  # Новый рабочий ключ 1 (активен)
-    base64.b64decode("QVEuQWI4Uk42SnRWcDJnenY3NWRwZzhJQkROa3Fwc1R5eEpYR2E4eVczWVphYjZFcjVlM3c=").decode('utf-8'),  # Новый рабочий ключ 2 (активен)
+    base64.b64decode("QVEuQWI4Uk42SnpIRm1URXI3dEZVVW1CRDQ0OVlibVplaXB5ejl4ZW5qa0x0Y3E3YXNVdkE=").decode('utf-8'),  # Свежий ключ 1 (активен, 500 RPD)
+    base64.b64decode("QVEuQWI4Uk42SnRWcDJnenY3NWRwZzhJQkROa3Fwc1R5eEpYR2E4eVczWVphYjZFcjVlM3c=").decode('utf-8'),  # Свежий ключ 2 (активен, 500 RPD)
+    base64.b64decode("QVEuQWI4Uk42SjJwNVZpaXRXMXl2TFRfeE4yajZqd2MxS0VQZktELUdpRWNTYm9fTFZpb0E=").decode('utf-8'),  # Свежий ключ 3 (активен, 500 RPD)
     base64.b64decode("QVEuQWI4Uk42S0xiQURfTWVGOUJiN2F4S3pyaWNFbW9qaTlLSUgtdWZ0OW44c3FnNWpockE=").decode('utf-8'),
     base64.b64decode("QVEuQWI4Uk42Sm9NMHBkaFIzaWJmUm11ckdNcldrVklULXJtaGltY2dSdjZJTU9BdjJ4ZkE=").decode('utf-8'),
     base64.b64decode("QVEuQWI4Uk42Sl81aTlHUzFPd2hYUDd0MHB1emhxc0ZxdWlhNTlVY2RFVWpuQVdoSjRQeHc=").decode('utf-8'),

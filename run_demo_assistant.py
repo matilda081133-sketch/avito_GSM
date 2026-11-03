@@ -1,3 +1,4 @@
+import random
 # -*- coding: utf-8 -*-
 """
 DEMO AI-RECRUITER FOR AVITO (GSM LOGISTICS)
@@ -1884,6 +1885,11 @@ def process_valeria_chat(chat_id: str, cand_name: str, item_title: str, msgs: li
         if any("сколько вам" in m.lower() for m in our_msgs[-2:]):
             print(f"⚠️ [ANTI-DUP] Вопрос о возрасте уже задавался ранее в чате {chat_id}, не дублируем.")
             return False
+
+    # Естественная пауза живого человека (человечный темп, защита от расхода лимитов и ожидание, пока кандидат допишет мысль)
+    human_delay = random.uniform(3.5, 6.0)
+    print(f"⏳ Имитация набора текста живым рекрутером ({human_delay:.1f} сек)...")
+    time.sleep(human_delay)
 
     print(f"🤖 ОТВЕТ АССИСТЕНТА:\n{reply_text}")
 
