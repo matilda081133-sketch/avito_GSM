@@ -218,9 +218,10 @@ async def avito_webhook(request: Request):
             return {"status": "ignored", "reason": "empty"}
 
         known_cabinets = {c["id"]: c for c in AVITO_CABINETS}
+        STAFF_USER_IDS = {272766174, 358201685, 358202810, 438887068, 438376151, AVITO_USER_ID}
 
-        # Игнорируем собственные сообщения любого из наших кабинетов
-        if author_id in known_cabinets or author_id == AVITO_USER_ID:
+        # Игнорируем собственные сообщения любого из наших кабинетов и сотрудников компании (Натали)
+        if author_id in known_cabinets or author_id in STAFF_USER_IDS:
             return {"status": "ok", "reason": "self"}
 
         target_cab = known_cabinets.get(user_id)
@@ -242,8 +243,10 @@ async def avito_webhook(request: Request):
                 c_item_url = c_ctx.get("url", "")
                 c_user = "Кандидат"
                 for u in c_item.get("users", []):
-                    if u.get("id") not in known_cabinets and u.get("id") != AVITO_USER_ID:
-                        c_user = u.get("name", "Кандидат")
+                    u_id = u.get("id")
+                    u_name = (u.get("name") or "").strip()
+                    if u_id not in known_cabinets and u_id not in STAFF_USER_IDS and u_name.lower() not in ["натали", "работа без границ", "хороший выбор", "прямой работодатель", "работа для вас", "avito wappi"]:
+                        c_user = u_name or "Кандидат"
                         break
                 
                 msgs = list(reversed(chat_info))

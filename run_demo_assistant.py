@@ -39,6 +39,13 @@ def get_avito_client(user_id=None):
     return client
 
 ALLOWED_CANDIDATE_NAMES = ["валерия", "цицилина", "валерия цицилина", "valeria"]
+STAFF_USER_IDS = {
+    272766174,  # Натали (менеджер)
+    358201685,  # Прямой работодатель
+    358202810,  # Работа без границ!
+    438887068,  # Хороший выбор
+    438376151,  # Работа для Вас
+}
 
 # Кастомные таймштампы сброса сессий (для обнуления диалогов по запросу пользователя)
 CHAT_SESSION_CUTOFFS = {
@@ -1642,9 +1649,9 @@ def process_valeria_chat(chat_id: str, cand_name: str, item_title: str, msgs: li
         return False
     last_msg = msgs_clean[-1]
 
-    # СТРОГАЯ ЗАЩИТА: Не отвечать на сообщения старше 15 минут!
+    # Защита от архивных чатов: не отвечать на сообщения старше 4 часов (14400 сек)
     last_msg_ts = last_msg.get('created', 0)
-    if last_msg_ts > 0 and (time.time() - last_msg_ts > 900):
+    if last_msg_ts > 0 and (time.time() - last_msg_ts > 14400):
         return False
     deal = find_b24_deal_for_chat(chat_id)
     deal_id = str(deal.get("ID", "")) if deal else ""
@@ -1853,25 +1860,25 @@ def check_and_reply_cabinet(cab_client: AvitoClient, cab_user_id: int, cab_name:
                 continue
             seen.add(cid)
             
-            # Если последнее сообщение отправлено нами — мы уже ответили, пропускаем
+            # Если последнее сообщение отправлено нами или сотрудником — мы уже ответили, пропускаем
             last_msg_meta = c.get('last_message', {})
-            if last_msg_meta.get('author_id') == cab_user_id:
+            last_author = last_msg_meta.get('author_id')
+            if last_author in STAFF_USER_IDS or last_author == cab_user_id:
                 continue
 
-            # ЖЕСТКИЙ ФИЛЬТР: Отвечать ТОЛЬКО на свежие входящие сообщения (не старше 15 минут)!
-            # Старые переписки и архивные непрочитанные чаты категорически игнорируются!
+            # Защита от архивных чатов: обрабатываем активные входящие сообщения за последние 4 часа (14400 сек)
             msg_created = last_msg_meta.get('created', 0)
             now_ts = time.time()
-            if msg_created > 0 and (now_ts - msg_created > 900):  # 15 минут
-                continue
-            if msg_created > 0 and msg_created < BOT_START_TIME:
+            if msg_created > 0 and (now_ts - msg_created > 14400):  # 4 часа
                 continue
 
             users = c.get('users', [])
             cand_name = ""
             for u in users:
-                if u.get('id') != cab_user_id:
-                    cand_name = u.get('name', '')
+                u_id = u.get('id')
+                u_name = (u.get('name') or '').strip()
+                if u_id not in STAFF_USER_IDS and u_id != cab_user_id and u_name.lower() not in ["натали", "работа без границ", "хороший выбор", "прямой работодатель", "работа для вас", "avito wappi"]:
+                    cand_name = u_name
                     break
             
             is_test_chat = (TARGET_CHAT_ID and cid == TARGET_CHAT_ID) or any(p in cand_name.lower() for p in ALLOWED_CANDIDATE_NAMES)
