@@ -129,6 +129,51 @@ def cron_status():
 
 
 
+@app.get("/avito-status")
+def avito_status():
+    """Диагностика всех 4 кабинетов Авито и мгновенный опрос."""
+    from config import AVITO_CABINETS
+    from run_demo_assistant import check_and_reply_valeria, CABINET_CLIENTS
+    cabs_res = {}
+    for c in AVITO_CABINETS:
+        cid = c["id"]
+        cname = c["name"]
+        cl = CABINET_CLIENTS.get(cid)
+        if not cl:
+            cabs_res[cname] = "client_not_initialized"
+            continue
+        try:
+            unr = cl.get_unread_chats(limit=5)
+            rec = cl.get_recent_chats(limit=5)
+            cabs_res[cname] = {
+                "id": cid,
+                "unread_count": len(unr),
+                "recent_count": len(rec),
+                "recent_chats": [
+                    {
+                        "id": ch.get("id"),
+                        "last_msg_author": ch.get("last_message", {}).get("author_id"),
+                        "last_msg_text": ch.get("last_message", {}).get("content", {}).get("text", "")[:60]
+                    } for ch in rec[:3]
+                ]
+            }
+        except Exception as e:
+            cabs_res[cname] = f"error: {e}"
+
+    step_result = None
+    try:
+        step_result = check_and_reply_valeria()
+    except Exception as e_step:
+        step_result = f"error: {e_step}"
+
+    return {
+        "status": "ok",
+        "cabinets": cabs_res,
+        "poll_result": step_result,
+        "poller_thread_alive": bool(threads_state.get("avito") and threads_state["avito"].is_alive()),
+        "time": time.strftime("%Y-%m-%d %H:%M:%S")
+    }
+
 @app.get("/test-gemini")
 def test_gemini_endpoint():
     """Тестовый эндпоинт для мгновенной диагностики вызова Gemini LLM из облака Render."""
