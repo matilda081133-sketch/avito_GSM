@@ -656,6 +656,7 @@ def process_single_chat(chat_summary):
         "citizenship": known_cit,
         "phone": known_phone,
         "vacancy": item_title,
+        "facility": fac_name,
         "district": cand_district,
         "ready_date": cand_ready_date,
         "schedule_pref": "",

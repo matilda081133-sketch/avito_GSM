@@ -143,39 +143,43 @@ def get_project_enum_id(facility_name: str, vacancy: str = "") -> str:
 def extract_facility_name(text: str = "", comments: str = "", vacancy_title: str = "", vacancy_url: str = "", proj_id: str = "", default: str = "Смарт Балашиха") -> str:
     """
     Определяет точное стандартизированное название объекта:
-    Склад Китайских Автозапчастей, Смарт Балашиха, Фарма Цвет Опалиха,
-    АБИ Владимир, СДС Химки, Тепофол Кашира, Бьюти Москва, Арника Серпухов и др.
+    АБИ Владимир, Тепофол Кашира, Альфатехформ, Смарт Балашиха,
+    Склад Китайских Автозапчастей, Фарма Цвет Опалиха, СДС Химки и др.
     """
     combined = f"{text or ''} {comments or ''} {vacancy_title or ''} {vacancy_url or ''}".lower()
-    # 0. Альфатехформ
-    if any(w in combined for w in ["альфатехформ", "альфатех", "альфа", "климовск", "klimovsk", "колбочк", "флакон"]):
-        return "Альфатехформ"
+    
+    # 0. Служебный
     if any(w in combined for w in ["9268686", "новосистем", "служебн", "техподдержк"]):
         return "Служебный звонок UIS"
-    
-    # 1. Автозапчасти Подольск
-    if any(w in combined for w in ["автозапчаст", "запчаст", "китайск", "avtozapchast", "zapchast"]) or (any(p in combined for p in ["подольск", "podolsk"]) and any(k in combined for k in ["коробок", "распаков", "запчаст"])):
-        return "Склад Китайских Автозапчастей"
-    
-    # 2. Фарма Опалиха / Красногорск / Чай / Травы
-    if any(w in combined for w in ["фарма", "опалих", "красногорск", "аптеч", "чай", "травы", "трав", "фасовка чая", "сортировщик чая", "farma", "opalih", "krasnogorsk", "chaya"]):
-        return "Фарма Цвет Опалиха"
 
-    # 3. Зоотовары / Балашиха / Смарт
-    if any(w in combined for w in ["зоо", "зоотовар", "смарт", "балаших", "салтыков", "кучин", "balashih", "zootovar", "zhivotnyh", "kuchin", "saltykov"]):
-        return "Смарт Балашиха"
+    # 1. АБИ Владимир (мясной комбинат, Вязанка, Стародворье, Горячая штучка)
+    if any(w in combined for w in ["аби", "владимир", "мясокомбинат", "мясо", "колбас", "вязанк", "стародвор", "vladimir", "kolbas"]):
+        return "АБИ Владимир"
 
-    # 4. СДС Химки / Брёхово
-    if any(w in combined for w in ["сдс", "брехов", "брёхов", "пятницк", "фомичев", "brehov", "khimki", "sds", "зеленоград", "zelenograd", "сходня", "лунево", "ленинградк", "электрик", "электрика", "электрики", "электротовар", "электротоваров"]):
-        return "СДС Химки"
-
-    # 5. Тепофол Кашира
+    # 2. Тепофол Кашира (завод утеплителя)
     if any(w in combined for w in ["тепофол", "кашир", "утеплит", "tepofol", "kashir"]):
         return "Тепофол Кашира"
 
-    # 6. АБИ Владимир (строго при наличии владимир / мясо / колбаса / аби)
-    if any(w in combined for w in ["аби", "владимир", "мясокомбинат", "мясо", "колбас", "вязанк", "стародвор", "vladimir", "kolbas"]):
-        return "АБИ Владимир"
+    # 3. Альфатехформ Подольск/Климовск (пластиковые флаконы)
+    if any(w in combined for w in ["альфатехформ", "альфатех", "альфа", "климовск", "klimovsk", "колбочк", "флакон"]):
+        return "Альфатехформ"
+
+    # 4. Зоотовары / Балашиха / Смарт Family
+    if any(w in combined for w in ["зоо", "зоотовар", "смарт", "балаших", "салтыков", "кучин", "balashih", "zootovar", "zhivotnyh", "kuchin", "saltykov"]):
+        return "Смарт Балашиха"
+
+    # 5. Автозапчасти Подольск
+    if any(w in combined for w in ["автозапчаст", "запчаст", "китайск", "avtozapchast", "zapchast"]) or (any(p in combined for p in ["подольск", "podolsk"]) and any(k in combined for k in ["коробок", "распаков", "запчаст"])):
+        return "Склад Китайских Автозапчастей"
+
+    # 6. Фарма Опалиха / Красногорск / Чай / Травы
+    if any(w in combined for w in ["фарма", "опалих", "красногорск", "аптеч", "чай", "травы", "трав", "фасовка чая", "сортировщик чая", "farma", "opalih", "krasnogorsk", "chaya"]):
+        return "Фарма Цвет Опалиха"
+
+    # 7. СДС Химки / Брёхово (склад электрики, БЕЗ ложного срабатывания на слово 'электричка')
+    sds_kw = ["сдс", "брехов", "брёхов", "пятницк", "фомичев", "brehov", "khimki", "sds", "зеленоград", "zelenograd", "сходня", "лунево", "ленинградк", "электротовар", "электротоваров"]
+    if any(w in combined for w in sds_kw) or re.search(r'\bэлектрик(?:а|и|ом)?\b', combined):
+        return "СДС Химки"
 
     # 7. Другие объекты по ключевым словам
     if any(w in combined for w in ["арник", "серпухов", "теплич"]):
@@ -682,7 +686,8 @@ def sync_candidate_to_b24_deal(chat_id: str, cand_data: dict, is_disqualified: b
 
         comm = current_deal.get('COMMENTS', '') if current_deal else ''
         existing_obj = current_deal.get('UF_CRM_1775470003043', '') if current_deal else ''
-        facility_name = cand_data.get('facility') or extract_facility_name(text=existing_obj or vacancy, comments=comm)
+        # ВАЖНЕЙШЕЕ ПРАВИЛО: Текущий отклик (cand_data / vacancy) ВСЕГДА имеет абсолютный приоритет над старым объектом!
+        facility_name = cand_data.get('facility') or extract_facility_name(text=vacancy or existing_obj, comments=comm, vacancy_title=vacancy)
         proj_enum = cand_data.get('project_enum') or get_project_enum_id(facility_name, vacancy)
 
         upd_fields = {}
@@ -720,10 +725,19 @@ def sync_candidate_to_b24_deal(chat_id: str, cand_data: dict, is_disqualified: b
             upd_fields['UF_CRM_1768816560167'] = city_id
 
         # Строгий формат: [Объект] Имя Фамилия | Номер телефона
+        # Все старые теги в скобках [СДС Химки], [Старый объект] полностью счищаются!
         parts = [f"[{facility_name}]"]
         body_parts = []
-        if name:
-            clean_n = " ".join([p.capitalize() for p in name.split()[:2]])
+        clean_name = name or ""
+        if not clean_name and current_deal:
+            old_t = current_deal.get('TITLE', '')
+            clean_t = re.sub(r'(\s*\[.*?\])+\s*', '', old_t).strip()
+            parts_t = [p.strip() for p in clean_t.split('|')]
+            if parts_t and parts_t[0]:
+                clean_name = parts_t[0]
+
+        if clean_name:
+            clean_n = " ".join([p.capitalize() for p in clean_name.split()[:2]])
             body_parts.append(clean_n)
         if phone:
             body_parts.append(phone)
