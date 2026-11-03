@@ -35,6 +35,12 @@ AVITO_CABINETS = [
         "client_secret": os.getenv("AVITO_CLIENT_SECRET", "vPKPG4c6xEi34NDRQL7OU7mxPYaIcc_rXwMQTiiA"),
     },
     {
+        "id": int(os.getenv("AVITO_CABINET_2_USER_ID", "358202810")),
+        "name": os.getenv("AVITO_CABINET_2_NAME", "Работа без границ!"),
+        "client_id": os.getenv("AVITO_CABINET_2_CLIENT_ID", "Z32uhj720CIlmoMai4uR"),
+        "client_secret": os.getenv("AVITO_CABINET_2_CLIENT_SECRET", "6hPPbeGC3XzfT6JNLSdUNeAY9kaKn4Rp8FMjr2Md"),
+    },
+    {
         "id": int(os.getenv("AVITO_CABINET_3_USER_ID", "438887068")),
         "name": os.getenv("AVITO_CABINET_3_NAME", "Хороший выбор"),
         "client_id": os.getenv("AVITO_CABINET_3_CLIENT_ID", "eIXr4FQgBJRbcw9cvKdK"),
