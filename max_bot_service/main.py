@@ -823,6 +823,7 @@ def find_b24_deal_by_phone(phone: str):
 OBJECT_SELECTION_CHATS = {
     "abi": -72039570639374,       # Аби Владимир
     "tepofol": -75926237514254,   # Тепофол Подбор
+    "alfa": -72008292324686,      # ЕЛЕНА ЖИЛИНА ПОДБОР (Альфатехформ)
     "smart": -72008292324686,     # ЕЛЕНА ЖИЛИНА ПОДБОР (Смарт Family Балашиха)
     "spb": -72008292324686        # ЕЛЕНА ЖИЛИНА ПОДБОР (Стандарт СПБ)
 }
@@ -853,6 +854,102 @@ def send_to_object_selection_chat(object_tag: str, summary_text: str, photo_url:
     except Exception as e:
         print(f"[OBJECT CHAT SEND ERR]: {e}", flush=True)
         return False
+
+
+def dispatch_candidate_passport_submission(chat_id: int, st: dict, photo_url: str):
+    """
+    Формирует эталонную выжимку по согласованному кандидату и отправляет в чат подбора объекта:
+    [ОБЪЕКТ]
+    [ФИО]
+    [Возраст] РФ
+    СМЗ есть
+    [Дата заезда]
+    [Телефон]
+    """
+    deal_id = st.get("deal_id")
+    target_tag = (st.get("object") or "spb").lower()
+
+    header_map = {
+        "abi": "АБИ",
+        "tepofol": "ТЕПОФОЛ",
+        "alfa": "АЛЬФАТЕХФОРМ",
+        "smart": "СМАРТ FAMILY",
+        "spb": "СТАНДАРТ"
+    }
+    header = header_map.get(target_tag, "СТАНДАРТ")
+
+    cand_fio = ""
+    cand_phone = st.get("phone") or ""
+    cand_age = ""
+    cand_date = ""
+
+    # 1. Попытка достать профиль из session_memory (SQLite)
+    try:
+        from session_memory import get_session_profile_by_deal_id, get_session_profile
+        prof = None
+        if deal_id:
+            prof = get_session_profile_by_deal_id(str(deal_id))
+        if not prof:
+            prof = get_session_profile(str(chat_id))
+        if prof:
+            cand_fio = prof.get("candidate_name") or ""
+            cand_phone = prof.get("phone_number") or cand_phone
+            cand_age = prof.get("age") or ""
+            cand_date = prof.get("departure_date") or ""
+    except Exception as e:
+        print(f"[SUMMARY PROF ERR]: {e}", flush=True)
+
+    # 2. Попытка достать из карточки сделки Битрикс24
+    if deal_id:
+        try:
+            d_info = get_b24_deal(deal_id)
+            if d_info:
+                d_title = d_info.get("TITLE", "")
+                if not cand_fio or cand_fio in ["Кандидат", ""]:
+                    clean_t = re.sub(r'\[.*?\]', '', d_title).strip()
+                    parts = [p.strip() for p in clean_t.split('|')]
+                    cand_fio = parts[0] if parts else clean_t
+
+                if not cand_phone:
+                    cand_phone = extract_phone(d_title) or ""
+        except Exception as e:
+            print(f"[SUMMARY B24 ERR]: {e}", flush=True)
+
+    if not cand_fio or cand_fio in ["Кандидат", ""]:
+        cand_fio = st.get("name") or "Кандидат"
+
+    age_str = f"{cand_age} РФ" if cand_age else "РФ"
+
+    if not cand_date:
+        import datetime
+        tomorrow = datetime.datetime.now() + datetime.timedelta(days=1)
+        cand_date = f"{tomorrow.day}.{tomorrow.month:02d}"
+
+    summary_text = (
+        f"{header}\n"
+        f"{cand_fio}\n"
+        f"{age_str}\n"
+        f"СМЗ есть\n"
+        f"{cand_date}\n"
+        f"{cand_phone}"
+    )
+
+    print(f"📋 [CANDIDATE SUMMARY BUILT for Chat {chat_id} / Object {target_tag}]:\n{summary_text}", flush=True)
+
+    # Отправляем выжимку и фото паспорта в чат подбора объекта
+    send_to_object_selection_chat(target_tag, summary_text, photo_url=photo_url)
+
+    # Добавляем в таймлайн сделки Б24 и уведомляем менеджера
+    if deal_id:
+        add_b24_timeline_comment(deal_id, f"📋 [ВЫЖИМКА В ЧАТ ПОДБОРА ({header})]:\n{summary_text}\nФото паспорта: {photo_url}")
+        d_info = get_b24_deal(deal_id)
+        mgr_id = d_info.get("ASSIGNED_BY_ID") if d_info else None
+        if mgr_id:
+            notify_b24_manager(
+                mgr_id,
+                f"⚡ ПАСПОРТ ПРИНЯТ: Кандидат {cand_fio} (сделка #{deal_id}) прислал паспорт! Выжимка направлена в чат подбора {header}. Подключитесь к диалогу и добавьте соискателя в рабочий чат бригадира!"
+            )
+
 
 
 # -------------------------------------------------------------
@@ -1125,10 +1222,8 @@ def handle_single_update(up: dict):
                             "чтобы служба безопасности завершила оформление пропуска."
                         )
                     else:
-                        reply = (
-                            "Отлично, все необходимые документы получены! Передала их в службу безопасности на оформление пропуска.\n\n"
-                            "В течение 15–30 минут координатор свяжется с вами по телефону для подтверждения деталей заезда!"
-                        )
+                        dispatch_candidate_passport_submission(chat_id, st, photo_url)
+                        reply = "Паспорт получен ✅ Рекрутер сейчас подключится, проверит данные и добавит вас в чат с бригадиром объекта! 🤝" 
                     send_message(chat_id, reply)
                     save_chat_message(chat_id, "model", reply)
                     return
@@ -1156,10 +1251,8 @@ def handle_single_update(up: dict):
                             "Теперь пришлите, пожалуйста, фото главного разворота паспорта (2–3 страница с вашей фотографией)."
                         )
                     else:
-                        reply = (
-                            "Отлично, все необходимые документы получены! Передала их в службу безопасности на оформление пропуска.\n\n"
-                            "В течение 15–30 минут координатор свяжется с вами по телефону для подтверждения деталей заезда!"
-                        )
+                        dispatch_candidate_passport_submission(chat_id, st, photo_url)
+                        reply = "Паспорт получен ✅ Рекрутер сейчас подключится, проверит данные и добавит вас в чат с бригадиром объекта! 🤝" 
                     send_message(chat_id, reply)
                     save_chat_message(chat_id, "model", reply)
                     return
