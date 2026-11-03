@@ -274,18 +274,33 @@ def get_next_ndz_deal_for_recruiter(user_id, called_today):
     Соблюдает строгую паузу 2.5 часа между повторными звонками одному кандидату.
     """
     for st in ["EXECUTING", "UC_REQ_PASSPORT", "UC_NDZ2", "UC_NDZ3"]:
+        filt = {
+            "ASSIGNED_BY_ID": user_id,
+            "STAGE_ID": st
+        }
+        # Для стадии «Запрос паспорта» прозваниваем ТОЛЬКО сделки старше одной недели (> 7 дней)
+        if st == "UC_REQ_PASSPORT":
+            week_ago_str = (datetime.now(MSK_TZ) - timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
+            filt["<=DATE_CREATE"] = week_ago_str
+
         res = call_b24("crm.deal.list", {
             "order": {"ID": "DESC"},
-            "filter": {
-                "ASSIGNED_BY_ID": user_id,
-                "STAGE_ID": st
-            },
+            "filter": filt,
             "select": ["ID", "TITLE", "STAGE_ID", "ASSIGNED_BY_ID", "COMMENTS", "CONTACT_ID", "DATE_CREATE"],
             "limit": 25
         })
         deals = res.get("result", [])
         for d in deals:
             did = str(d.get("ID"))
+            # Двойная проверка в Python: для «Запрос паспорта» строго старше 7 дней
+            if st == "UC_REQ_PASSPORT":
+                dc = d.get("DATE_CREATE") or ""
+                try:
+                    dc_dt = datetime.fromisoformat(dc[:19])
+                    if (datetime.now() - dc_dt).total_seconds() < 7 * 86400:
+                        continue
+                except Exception:
+                    pass
             # Антиспам-пауза 2.5 часа (9000 сек)
             last_info = called_today.get(did)
             if last_info:
