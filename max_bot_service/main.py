@@ -77,12 +77,13 @@ DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bot_state.db
 _chat_send_lock = threading.Lock()
 _recent_chat_sends = {}
 
-# Интерактивные кнопки 4 флагманских объектов
+# Интерактивные кнопки 5 флагманских объектов
 KEYBOARD_OBJECTS = [
     [{"type": "callback", "text": "1. 🥩 Владимир (АБИ) до 4 900 ₽", "payload": "Расскажите про АБИ во Владимире"}],
     [{"type": "callback", "text": "2. 🏭 Кашира (Тепофол) 3 800 ₽", "payload": "Расскажите про Тепофол в Кашире"}],
     [{"type": "callback", "text": "3. 🧴 Подольск (Альфатехформ) 3 700 ₽", "payload": "Расскажите про Альфатехформ в Подольске"}],
-    [{"type": "callback", "text": "4. 🐶 Балашиха (Зоотовары) от 3 600 ₽", "payload": "Расскажите про зоотовары в Балашихе"}]
+    [{"type": "callback", "text": "4. 🐶 Балашиха (Зоотовары) от 3 600 ₽", "payload": "Расскажите про зоотовары в Балашихе"}],
+    [{"type": "callback", "text": "5. 🚛 Санкт-Петербург (Стандарт) до 4 600 ₽", "payload": "Расскажите про Стандарт в СПБ"}]
 ]
 
 # -------------------------------------------------------------
@@ -613,6 +614,8 @@ def check_document_vision(img_url: str) -> dict:
 {
   "is_passport": true/false,
   "doc_type": "main_page" | "registration_page" | "not_a_document",
+  "fio": "Фамилия Имя Отчество соискателя (если видно на развороте, иначе null)",
+  "birth_year": "Год рождения или возраст соискателя (если видно на развороте, иначе null)",
   "description": "краткое описание того что на фото на русском"
 }"""
 
@@ -650,6 +653,8 @@ def check_document_vision(img_url: str) -> dict:
                             return {
                                 "is_passport": True,
                                 "doc_type": dtype,
+                                "fio": parsed.get("fio"),
+                                "birth_year": parsed.get("birth_year"),
                                 "description": parsed.get("description", "разворот паспорта РФ")
                             }
                         else:
@@ -772,6 +777,69 @@ def get_b24_deal(deal_id):
         print(f"[B24 GET DEAL ERROR]: {e}", flush=True)
         return None
 
+
+def update_b24_deal_stage(deal_id, stage_id: str) -> bool:
+    """Обновляет стадию сделки в Битрикс24 через REST API."""
+    if not deal_id or not B24_WEBHOOK:
+        return False
+    try:
+        url = f"{B24_WEBHOOK}crm.deal.update.json"
+        payload = {
+            "id": str(deal_id),
+            "fields": {
+                "STAGE_ID": stage_id
+            }
+        }
+        req = urllib.request.Request(url, data=json.dumps(payload).encode('utf-8'), headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=8, context=ctx) as r:
+            res = json.loads(r.read().decode('utf-8'))
+            if res.get("result"):
+                print(f"✅ [B24 STAGE UPDATED] Сделка #{deal_id} -> {stage_id}", flush=True)
+                return True
+    except Exception as e:
+        print(f"[B24 UPDATE STAGE ERR]: {e}", flush=True)
+    return False
+
+
+def check_manager_request(text: str) -> bool:
+    """Определяет, просит ли кандидат живого оператора, менеджера или звонок."""
+    t = text.lower()
+    mgr_patterns = [
+        r'\bпозвони(?:те)?\b',
+        r'\bперезвони(?:те)?\b',
+        r'\bнабери(?:те)?\b',
+        r'\bсвяжитесь\b',
+        r'\bменеджер(?:а|ом|у)?\b',
+        r'\bоператор(?:а|ом|у)?\b',
+        r'\bкоординатор(?:а|ом|у)?\b',
+        r'\bживой\s+человек\b',
+        r'\bс\s+человеком\b',
+        r'\bпоговорить\b',
+        r'\bспециалист(?:а|ом|у)?\b',
+        r'\bпозови(?:те)?\b',
+        r'\bсоедини(?:те)?\b',
+        r'\bсвязать(?:ся)?\b',
+        r'\bоткрыт(?:ая|ой)\s+лини(?:я|и)\b'
+    ]
+    return any(re.search(pat, t) for pat in mgr_patterns)
+
+
+def check_readiness_intent(text: str) -> bool:
+    """Определяет готовность кандидата к выезду / оформлению."""
+    t = text.lower()
+    ready_patterns = [
+        r'\bготов(?:а|ы)?\b',
+        r'\bсогласен\b', r'\bсогласна\b', r'\bсогласны\b',
+        r'\bзапишите\b', r'\bзаписать\b',
+        r'\bподход(?:ит|ят)\b', r'\bустраива(?:ет|ют)\b',
+        r'\bхочу поехать\b', r'\bхочу на вахту\b', r'\bхочу работать\b',
+        r'\bвыезжаю\b', r'\bпоеду\b', r'\bпоедем\b',
+        r'\bкогда выезд\b', r'\bкуда ехать\b',
+        r'\bоформляйте\b', r'\bоформить\b', r'\bберу билет\b',
+        r'\bдавайте\b'
+    ]
+    return any(re.search(pat, t) for pat in ready_patterns)
+
 def notify_b24_manager(manager_id, message: str):
     """Отправляет персональное системное уведомление в колокольчик менеджеру в Битрикс24."""
     if not manager_id or not B24_WEBHOOK:
@@ -856,7 +924,7 @@ def send_to_object_selection_chat(object_tag: str, summary_text: str, photo_url:
         return False
 
 
-def dispatch_candidate_passport_submission(chat_id: int, st: dict, photo_url: str):
+def dispatch_candidate_passport_submission(chat_id: int, st: dict, photo_url: str, fio: str = None, age: str = None):
     """
     Формирует эталонную выжимку по согласованному кандидату и отправляет в чат подбора объекта:
     [ОБЪЕКТ]
@@ -867,7 +935,7 @@ def dispatch_candidate_passport_submission(chat_id: int, st: dict, photo_url: st
     [Телефон]
     """
     deal_id = st.get("deal_id")
-    target_tag = (st.get("object") or "spb").lower()
+    target_tag = (st.get("object") or "abi").lower()
 
     header_map = {
         "abi": "АБИ",
@@ -876,11 +944,11 @@ def dispatch_candidate_passport_submission(chat_id: int, st: dict, photo_url: st
         "smart": "СМАРТ FAMILY",
         "spb": "СТАНДАРТ"
     }
-    header = header_map.get(target_tag, "СТАНДАРТ")
+    header = header_map.get(target_tag, "АБИ")
 
-    cand_fio = ""
+    cand_fio = fio or ""
     cand_phone = st.get("phone") or ""
-    cand_age = ""
+    cand_age = age or ""
     cand_date = ""
 
     # 1. Попытка достать профиль из session_memory (SQLite)
@@ -892,9 +960,11 @@ def dispatch_candidate_passport_submission(chat_id: int, st: dict, photo_url: st
         if not prof:
             prof = get_session_profile(str(chat_id))
         if prof:
-            cand_fio = prof.get("candidate_name") or ""
+            if not cand_fio:
+                cand_fio = prof.get("candidate_name") or ""
             cand_phone = prof.get("phone_number") or cand_phone
-            cand_age = prof.get("age") or ""
+            if not cand_age:
+                cand_age = prof.get("age") or ""
             cand_date = prof.get("departure_date") or ""
     except Exception as e:
         print(f"[SUMMARY PROF ERR]: {e}", flush=True)
@@ -939,15 +1009,16 @@ def dispatch_candidate_passport_submission(chat_id: int, st: dict, photo_url: st
     # Отправляем выжимку и фото паспорта в чат подбора объекта
     send_to_object_selection_chat(target_tag, summary_text, photo_url=photo_url)
 
-    # Добавляем в таймлайн сделки Б24 и уведомляем менеджера
+    # Переводим сделку в Б24 в «Направлен на смену» (PREPAYMENT_INVOICE), добавляем в таймлайн и уведомляем менеджера
     if deal_id:
-        add_b24_timeline_comment(deal_id, f"📋 [ВЫЖИМКА В ЧАТ ПОДБОРА ({header})]:\n{summary_text}\nФото паспорта: {photo_url}")
+        update_b24_deal_stage(deal_id, "PREPAYMENT_INVOICE")
+        add_b24_timeline_comment(deal_id, f"🚀 [ПАСПОРТ ПРИНЯТ]: Сделка переведена в стадию «Направлен на смену».\n📋 Выжимка в чат подбора ({header}):\n{summary_text}\nФото паспорта: {photo_url}")
         d_info = get_b24_deal(deal_id)
         mgr_id = d_info.get("ASSIGNED_BY_ID") if d_info else None
         if mgr_id:
             notify_b24_manager(
                 mgr_id,
-                f"⚡ ПАСПОРТ ПРИНЯТ: Кандидат {cand_fio} (сделка #{deal_id}) прислал паспорт! Выжимка направлена в чат подбора {header}. Подключитесь к диалогу и добавьте соискателя в рабочий чат бригадира!"
+                f"⚡ ПАСПОРТ ПРИНЯТ: Кандидат {cand_fio} (сделка #{deal_id}) прислал фото паспорта! Сделка переведена в «Направлен на смену». Выжимка направлена в чат подбора {header}. Подключитесь и добавьте соискателя в рабочий чат с бригадиром объекта!"
             )
 
 
@@ -1002,6 +1073,8 @@ def handle_single_update(up: dict):
             return
         if not chat_id or (isinstance(chat_id, int) and chat_id <= 0) or str(chat_id).startswith("-"):
             return
+        if chat_id in OBJECT_SELECTION_CHATS.values() or str(chat_id) in [str(x) for x in OBJECT_SELECTION_CHATS.values()]:
+            return
 
         body = msg.get("body", {})
         mid = body.get("mid")
@@ -1042,7 +1115,7 @@ def handle_single_update(up: dict):
         # -------------------------------------------------------------
         is_first_start = (u_type == "bot_started") or (text.lower() in ["/start", "старт", "начать", "меню"]) or text.startswith("/start ")
 
-        # Проверяем deeplink-параметр start={tag}_{deal_id} (например, /start abi_98010)
+        # Проверяем deeplink-параметр start={tag}_{deal_id} (например, /start sms_98010 или /start abi_98010 или /start 95748)
         start_payload = ""
         if text.startswith("/start "):
             start_payload = text[7:].strip()
@@ -1052,24 +1125,63 @@ def handle_single_update(up: dict):
             start_payload = str(body.get("payload")).strip()
 
         FACILITY_NAMES_MAP = {
-            "abi": "АБИ Владимир (мясокомбинат, ставка от 3 900 до 4 900 ₽)",
-            "tepofol": "Тепофол Кашира (завод утеплителя, ставка 3 800 – 4 300 ₽)",
-            "alfa": "Альфатехформ Климовск (производство флаконов, ставка 3 700 ₽, дневные смены)",
+            "abi": "АБИ Владимир (мясокомбинат, от 3 900 до 4 900 ₽)",
+            "tepofol": "Тепофол Кашира (завод утеплителя, от 3 800 до 4 300 ₽)",
+            "alfa": "Альфатехформ Климовск (производство флаконов, 3 700 ₽)",
             "smart": "Смарт Family Балашиха (склад зоотоваров Petshop)",
-            "spb": "Стандарт СПБ (склад оконного профиля, ставка 3 900 ₽, ежедневные выплаты)"
+            "spb": "Стандарт СПБ (склад оконного профиля, от 3 900 до 4 600 ₽)"
         }
 
         parts = start_payload.split("_", 1) if start_payload else []
         target_tag = parts[0].lower() if parts else ""
-        target_deal_id = parts[1] if len(parts) > 1 and parts[1].isdigit() else ""
+        target_deal_id = ""
+        if len(parts) > 1 and parts[1].isdigit():
+            target_deal_id = parts[1]
+        elif start_payload.isdigit():
+            target_deal_id = start_payload
+            target_tag = "sms"
 
-        # 1. Сценарий для кандидатов из Авито ПОСЛЕ ЗВОНКА (deeplink содержит deal_id, например spb_97904)
-        if start_payload and target_deal_id and is_first_start:
+        # 1. Сценарий СМС-РАССЫЛКИ (sms_123, broadcast_123, просто 123 или общий вход):
+        # Кандидату сразу предлагаются интерактивные кнопки всех наших вахтовых вакансий
+        is_sms_broadcast = (target_tag in ["sms", "broadcast", "promo"]) or (not target_tag and target_deal_id)
+
+        if is_sms_broadcast and is_first_start:
+            cand_name = name
+            cand_phone = st.get("phone")
+            if target_deal_id:
+                deal_info = get_b24_deal(target_deal_id)
+                if deal_info:
+                    d_title = deal_info.get("TITLE", "")
+                    cand_phone = cand_phone or extract_phone(d_title)
+                    if cand_name in ["Кандидат", ""] or not cand_name:
+                        t_parts = d_title.split()
+                        if len(t_parts) > 1 and not t_parts[1].isdigit():
+                            cand_name = t_parts[1]
+                    add_b24_timeline_comment(target_deal_id, "📲 Кандидат перешел по ссылке из SMS-рассылки в МАКС Бот (@id9729371578_bot)")
+
+            update_user_state(
+                chat_id,
+                deal_id=int(target_deal_id) if target_deal_id and target_deal_id.isdigit() else st.get("deal_id"),
+                name=cand_name,
+                phone=cand_phone,
+                scenario="broadcast",
+                step="AWAITING_SELECTION"
+            )
+
+            welcome_msg = (
+                "Здравствуйте! Мы — прямой работодатель, предлагаем надежную работу и вахту с бесплатным проживанием в чистых квартирах, горячим питанием и компенсацией проезда. 🤝\n\n"
+                "Выберите интересующий объект кнопкой ниже или задайте любой вопрос:"
+            )
+            send_message(chat_id, welcome_msg, keyboard=KEYBOARD_OBJECTS)
+            save_chat_message(chat_id, "model", welcome_msg)
+            return
+
+        # 2. Сценарий брони конкретного объекта после звонка рекрутера (например /start abi_95748)
+        if target_tag in ["abi", "tepofol", "alfa", "smart", "spb"] and target_deal_id and is_first_start:
             cand_name = name
             avito_ctx = ""
             phone_num = None
 
-            # 1. Попытка достать профиль из session_memory (SQLite)
             try:
                 import sys
                 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -1083,7 +1195,6 @@ def handle_single_update(up: dict):
             except Exception as e_prof:
                 print(f"[SESSION PROF ERR]: {e_prof}", flush=True)
 
-            # 2. Попытка загрузить историю сделки из Битрикс24
             if target_deal_id:
                 deal_info = get_b24_deal(target_deal_id)
                 if deal_info:
@@ -1098,7 +1209,6 @@ def handle_single_update(up: dict):
 
             fac_label = FACILITY_NAMES_MAP.get(target_tag, "АБИ Владимир")
 
-            # Сохраняем в базу состояние кандидата
             update_user_state(
                 chat_id,
                 deal_id=int(target_deal_id) if target_deal_id.isdigit() else st.get("deal_id"),
@@ -1120,13 +1230,10 @@ def handle_single_update(up: dict):
             save_chat_message(chat_id, "model", welcome_msg)
             return
 
-        if target_tag in ["sms", "broadcast", "promo"]:
-            update_user_state(chat_id, scenario="broadcast")
-            st["scenario"] = "broadcast"
-
+        # 3. Общий первый вход без параметров
         if is_first_start and not has_chat_history(chat_id):
             welcome_msg = (
-                "Здравствуйте! Рада приветствовать вас. Мы — прямой работодатель, предлагаем работу и вахту с бесплатным проживанием в чистых квартирах и питанием.\n\n"
+                "Здравствуйте! Рада приветствовать вас. Мы — прямой работодатель, предлагаем работу и вахту с бесплатным проживанием в чистых квартирах и питанием. 🤝\n\n"
                 "Выберите интересующий объект кнопкой ниже или задайте любой вопрос:"
             )
             send_message(chat_id, welcome_msg, keyboard=KEYBOARD_OBJECTS)
@@ -1201,29 +1308,16 @@ def handle_single_update(up: dict):
                 elif dtype == "main_page":
                     update_user_state(chat_id, has_main_page=1)
                     st["has_main_page"] = 1
+                    doc_fio = doc_check.get("fio")
+                    doc_age = doc_check.get("birth_year")
+                    if doc_fio:
+                        st["name"] = doc_fio
+                        update_user_state(chat_id, name=doc_fio)
 
-                    # Сохраняем ссылку на фото в сделку Битрикс24 и уведомляем ответственного
-                    deal_id = st.get("deal_id")
-                    if deal_id:
-                        deal_info = get_b24_deal(deal_id)
-                        manager_id = deal_info.get("ASSIGNED_BY_ID") if deal_info else None
-                        cand_title = deal_info.get("TITLE") or st.get("name") or name or "Кандидат"
-                        add_b24_timeline_comment(deal_id, f"📷 Получено фото паспорта: Главный разворот 2-3 стр.\nСсылка: {photo_url}")
-                        if manager_id:
-                            notify_b24_manager(
-                                manager_id,
-                                f"📷 Внимание: Кандидат {cand_title} (сделка #{deal_id}) прислал в МАКС фото паспорта (главный разворот 2-3 стр.)!\nСсылка: {photo_url}"
-                            )
+                    # Сразу отправляем выжимку в чат подбора объекта, переводим в «Направлен на смену» и уведомляем менеджера
+                    dispatch_candidate_passport_submission(chat_id, st, photo_url, fio=doc_fio, age=doc_age)
 
-                    if not st.get("has_reg_page"):
-                        reply = (
-                            "Главный разворот паспорта принят! 👍\n\n"
-                            "Теперь пришлите, пожалуйста, второе фото — разворот с действующей пропиской (штамп регистрации), "
-                            "чтобы служба безопасности завершила оформление пропуска."
-                        )
-                    else:
-                        dispatch_candidate_passport_submission(chat_id, st, photo_url)
-                        reply = "Паспорт получен ✅ Рекрутер сейчас подключится, проверит данные и добавит вас в чат с бригадиром объекта! 🤝" 
+                    reply = "Паспорт получен ✅ Рекрутер сейчас подключится, проверит данные и добавит вас в рабочий чат с бригадиром объекта! 🤝\n\n(При наличии возможности пришлите также фото разворота со штампом прописки/регистрации для завершения пропуска)."
                     send_message(chat_id, reply)
                     save_chat_message(chat_id, "model", reply)
                     return
@@ -1232,27 +1326,19 @@ def handle_single_update(up: dict):
                     update_user_state(chat_id, has_reg_page=1)
                     st["has_reg_page"] = 1
 
-                    # Сохраняем ссылку на фото в сделку Битрикс24 и уведомляем ответственного
                     deal_id = st.get("deal_id")
                     if deal_id:
-                        deal_info = get_b24_deal(deal_id)
-                        manager_id = deal_info.get("ASSIGNED_BY_ID") if deal_info else None
-                        cand_title = deal_info.get("TITLE") or st.get("name") or name or "Кандидат"
                         add_b24_timeline_comment(deal_id, f"📷 Получено фото паспорта: Страница с пропиской\nСсылка: {photo_url}")
-                        if manager_id:
-                            notify_b24_manager(
-                                manager_id,
-                                f"📷 Внимание: Кандидат {cand_title} (сделка #{deal_id}) прислал в МАКС фото паспорта (страница со штампом прописки)!\nСсылка: {photo_url}"
-                            )
+                        target_tag = (st.get("object") or "abi").lower()
+                        send_to_object_selection_chat(target_tag, f"📷 Прописка / регистрация соискателя ({st.get('name', 'Кандидат')}):", photo_url=photo_url)
 
                     if not st.get("has_main_page"):
                         reply = (
                             "Страница со штампом прописки принята! 👍\n\n"
-                            "Теперь пришлите, пожалуйста, фото главного разворота паспорта (2–3 страница с вашей фотографией)."
+                            "Теперь пришлите, пожалуйста, главное фото — 2–3 страницу паспорта (разворот с вашей фотографией)."
                         )
                     else:
-                        dispatch_candidate_passport_submission(chat_id, st, photo_url)
-                        reply = "Паспорт получен ✅ Рекрутер сейчас подключится, проверит данные и добавит вас в чат с бригадиром объекта! 🤝" 
+                        reply = "Фото прописки принято ✅ Данные переданы координатору! 🤝"
                     send_message(chat_id, reply)
                     save_chat_message(chat_id, "model", reply)
                     return
@@ -1276,8 +1362,78 @@ def handle_single_update(up: dict):
                     add_b24_timeline_comment(did, f"💬 Кандидат вышел на связь в МАКС Боте (@id9729371578_bot), Chat ID: {chat_id}")
                     print(f"🔗 [B24 СДЕЛКА НАЙДЕНА И ПРИВЯЗАНА] #{did} для {phone} (Ответственный: {existing.get('ASSIGNED_BY_ID')})", flush=True)
 
+        # Обновляем выбранный объект, если кандидат упомянул объект или нажал кнопку
+        low_t = text.lower()
+        if "аби" in low_t or "владимир" in low_t:
+            update_user_state(chat_id, object="abi")
+            st["object"] = "abi"
+        elif "тепофол" in low_t or "кашир" in low_t:
+            update_user_state(chat_id, object="tepofol")
+            st["object"] = "tepofol"
+        elif "альфа" in low_t or "подольск" in low_t or "климовск" in low_t:
+            update_user_state(chat_id, object="alfa")
+            st["object"] = "alfa"
+        elif "зоотовар" in low_t or "балаших" in low_t or "petshop" in low_t or "смарт" in low_t:
+            update_user_state(chat_id, object="smart")
+            st["object"] = "smart"
+        elif "спб" in low_t or "питер" in low_t or "шушар" in low_t or "стандарт" in low_t or "петербург" in low_t:
+            update_user_state(chat_id, object="spb")
+            st["object"] = "spb"
+
         # -------------------------------------------------------------
-        # Д. ПРЯМОЙ ОТВЕТ НЕЙРОСЕТИ (GEMINI LLM С ЖИВОЙ СТЕНОГРАММОЙ МАКС)
+        # 1. ЗАПРОС СВЯЗИ С ЖИВЫМ МЕНЕДЖЕРОМ / ОПЕРАТОРОМ
+        # -------------------------------------------------------------
+        if check_manager_request(text):
+            deal_id = st.get("deal_id")
+            cand_p = st.get("phone") or ""
+            cand_title = st.get("name") or name or "Кандидат"
+            if deal_id:
+                d_info = get_b24_deal(deal_id)
+                mgr_id = d_info.get("ASSIGNED_BY_ID") if d_info else None
+                if d_info and d_info.get("TITLE"):
+                    cand_title = d_info.get("TITLE")
+                add_b24_timeline_comment(deal_id, f"💬 Кандидат в МАКС ожидает ответа менеджера в открытой линии:\n«{text}»")
+                if mgr_id:
+                    notify_b24_manager(
+                        mgr_id,
+                        f"🔔 ВНИМАНИЕ: Кандидат {cand_title} (тел: {cand_p}, сделка #{deal_id}) в МАКС ждет ответа ответственного в открытой линии! Запрос: «{text}»"
+                    )
+            reply_mgr = (
+                "Передала ваш запрос координатору! Специалист уже подключается к открытой линии и свяжется с вами. 🤝 "
+                "Вы также можете написать ваш вопрос или уточнения здесь."
+            )
+            send_message(chat_id, reply_mgr)
+            save_chat_message(chat_id, "model", reply_mgr)
+            return
+
+        # -------------------------------------------------------------
+        # 2. ИЗЪЯВЛЕНИЕ ГОТОВНОСТИ К ВЫЕЗДУ (ЦЕЛЕВОЙ КАНДИДАТ) -> ЗАПРОС ПАСПОРТА
+        # -------------------------------------------------------------
+        if check_readiness_intent(text):
+            deal_id = st.get("deal_id")
+            cur_obj = st.get("object") or "abi"
+            fac_label = FACILITY_NAMES_MAP.get(cur_obj, "АБИ Владимир")
+
+            # Переводим сделку в Б24 в стадию «Запрос паспорта»
+            if deal_id:
+                update_b24_deal_stage(deal_id, "UC_REQ_PASSPORT")
+                add_b24_timeline_comment(deal_id, f"📋 [МАКС БОТ]: Кандидат подтвердил интерес и готовность к выезду ({fac_label}). Сделка переведена в стадию «Запрос паспорта». Запрошено фото документов.")
+
+            update_user_state(chat_id, step="AWAITING_PASSPORT_MAIN")
+            st["step"] = "AWAITING_PASSPORT_MAIN"
+
+            reply_pass = (
+                f"Отлично, фиксирую за вами место на объект {fac_label}! 🤝\n\n"
+                "Для оформления бесплатного электронного билета на поезд/автобус за счет компании и заказа электронного пропуска на КПП, "
+                "отправьте, пожалуйста, четкое фото 2-3 страницы паспорта (главный разворот с фотографией) сюда в чат.\n\n"
+                "Служба заботы сразу проверит данные и согласует дату выезда!"
+            )
+            send_message(chat_id, reply_pass)
+            save_chat_message(chat_id, "model", reply_pass)
+            return
+
+        # -------------------------------------------------------------
+        # 3. ПРЯМОЙ ОТВЕТ НЕЙРОСЕТИ (GEMINI LLM С ЖИВОЙ СТЕНОГРАММОЙ МАКС)
         # -------------------------------------------------------------
         live_transcript = get_live_transcript(chat_id, count=10)
 
@@ -1295,6 +1451,11 @@ def handle_single_update(up: dict):
             cand_name=st.get("name", name),
             context_hint=context_hint
         )
+
+        # Если нейросеть запросила паспорт у кандидата, автоматически переводим сделку в «Запрос паспорта»
+        if ("паспорт" in ai_reply.lower() or "разворот" in ai_reply.lower()) and st.get("deal_id"):
+            update_b24_deal_stage(st.get("deal_id"), "UC_REQ_PASSPORT")
+            add_b24_timeline_comment(st.get("deal_id"), f"📋 [МАКС БОТ]: Сделка переведена в стадию «Запрос паспорта». Соискателю отправлен запрос фото документов.")
 
         send_message(chat_id, ai_reply)
         save_chat_message(chat_id, "model", ai_reply)
