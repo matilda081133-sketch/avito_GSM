@@ -1239,21 +1239,32 @@ def process_valeria_chat(chat_id: str, cand_name: str, item_title: str, msgs: li
     if card_info.get("fio") and not profile.get("candidate_name"):
         profile["candidate_name"] = card_info["fio"]
 
-    age_found = extract_age(valeria_text) or extract_age(" \n ".join(cand_msgs))
+    # Несгораемая память по ВСЕМ ключевым параметрам квалификации по всей истории переписки:
+    all_cand_text = (" \n ".join(cand_msgs) + " \n " + valeria_text).strip()
+
+    age_found = extract_age(valeria_text) or extract_age(all_cand_text)
     if age_found:
         profile["age"] = age_found
 
-    cit_found = extract_citizenship(valeria_text)
+    cit_found = extract_citizenship(valeria_text) or extract_citizenship(all_cand_text)
     if cit_found:
         profile["has_rf_passport"] = (cit_found == "РФ")
 
-    phone_found = extract_phone_number(valeria_text)
+    phone_found = extract_phone_number(valeria_text) or extract_phone_number(all_cand_text)
     if phone_found:
         profile["phone_number"] = phone_found
 
-    city_found = extract_city(valeria_text)
+    city_found = extract_city(valeria_text) or extract_city(all_cand_text)
     if city_found:
         profile["origin_city"] = city_found
+
+    date_found = extract_ready_date(valeria_text) or extract_ready_date(all_cand_text)
+    if date_found:
+        profile["departure_date"] = date_found
+
+    gender_found = extract_gender(all_cand_text, profile.get("candidate_name", ""))
+    if gender_found:
+        profile["gender"] = gender_found
 
     # Сохраняем обновленный профиль сессии
     update_session_profile(**profile)
