@@ -590,7 +590,7 @@ def sync_candidate_to_b24_deal(chat_id: str, cand_data: dict, is_disqualified: b
             'filter': {'%UF_CRM_1770280572875': chat_id},
             'select': ['ID', 'TITLE', 'CONTACT_ID', 'STAGE_ID', 'ASSIGNED_BY_ID', 'CATEGORY_ID', 'SOURCE_ID',
                        'UF_CRM_1775470003043', 'UF_CRM_1768815865773', 'UF_CRM_1768816011673', 
-                       'UF_CRM_1768816356722', 'UF_CRM_1768816331873', 'UF_CRM_1768816641561', 'UF_CRM_1768816560167']
+                       'UF_CRM_1768816356722', 'UF_CRM_1768816331873', 'UF_CRM_1768816641561', 'UF_CRM_1768816560167', 'UF_CRM_1780991278280', 'UF_CRM_1768816817128']
         })
         deals = res.get('result', [])
         if not deals:
@@ -599,7 +599,7 @@ def sync_candidate_to_b24_deal(chat_id: str, cand_data: dict, is_disqualified: b
                 'filter': {'%COMMENTS': chat_id},
                 'select': ['ID', 'TITLE', 'CONTACT_ID', 'STAGE_ID', 'ASSIGNED_BY_ID', 'CATEGORY_ID', 'SOURCE_ID',
                            'UF_CRM_1775470003043', 'UF_CRM_1768815865773', 'UF_CRM_1768816011673', 
-                           'UF_CRM_1768816356722', 'UF_CRM_1768816331873', 'UF_CRM_1768816641561', 'UF_CRM_1768816560167']
+                           'UF_CRM_1768816356722', 'UF_CRM_1768816331873', 'UF_CRM_1768816641561', 'UF_CRM_1768816560167', 'UF_CRM_1780991278280', 'UF_CRM_1768816817128']
             })
             deals = res.get('result', [])
 
@@ -705,16 +705,19 @@ def sync_candidate_to_b24_deal(chat_id: str, cand_data: dict, is_disqualified: b
         if city_id and not current_deal.get('UF_CRM_1768816560167'):
             upd_fields['UF_CRM_1768816560167'] = city_id
 
-        # Дата заселения / заезда на вахту (UF_CRM_1768816817128)
+        # ВСЕГДА заполняем Дату выхода на смену (UF_CRM_1780991278280) и Дату заселения (UF_CRM_1768816817128)
         ready_date_iso = cand_data.get('ready_date_iso')
-        if ready_date_iso and not current_deal.get('UF_CRM_1768816817128'):
-            upd_fields['UF_CRM_1768816817128'] = ready_date_iso
+        if ready_date_iso:
+            if not current_deal.get('UF_CRM_1780991278280'):
+                upd_fields['UF_CRM_1780991278280'] = ready_date_iso
+            if not current_deal.get('UF_CRM_1768816817128'):
+                upd_fields['UF_CRM_1768816817128'] = ready_date_iso
             try:
                 call_b24('crm.timeline.comment.add', {
                     'fields': {
                         'ENTITY_ID': deal_id,
                         'ENTITY_TYPE': 'deal',
-                        'COMMENT': f"📅 Дата выезда/заселения: {cand_data.get('ready_date')} ({ready_date_iso})"
+                        'COMMENT': f"📅 Согласованная дата выхода на смену / заезда: {cand_data.get('ready_date')} ({ready_date_iso})"
                     }
                 })
             except Exception:
