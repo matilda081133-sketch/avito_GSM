@@ -1007,6 +1007,36 @@ def generate_human_reply(cand_text: str, ad_title: str, cand_history_only: str =
     cand_first_name = ""
     name_prefix = ""
 
+    # -------------------------------------------------------------------------
+    # ЖЕСТКАЯ ПРОВЕРКА ГРАЖДАНСТВА: если кандидат ранее явно сказал, что паспорта РФ нет
+    # -------------------------------------------------------------------------
+    if profile.get("has_rf_passport") is False or any(phrase in combined_cand for phrase in ["паспорт рф нет", "нет паспорта", "нет гражданства рф", "таджикистан", "узбекистан", "молдова", "кыргызстан", "киргизия", "армения", "беларусь", "внж", "рвп", "патента нет"]):
+        profile["has_rf_passport"] = False
+        return (
+            "Здравствуйте! Благодарим за интерес к нашей компании.\n\n"
+            "К сожалению, по требованиям службы безопасности производств и регламенту предприятий согласование пропуска и официальное трудоустройство возможно строго при наличии паспорта гражданина РФ.\n\n"
+            "Искренне желаем вам успехов в поиске подходящей работы!",
+            True,
+            "Отсутствие паспорта РФ"
+        )
+
+    # -------------------------------------------------------------------------
+    # ЖЕСТКАЯ ПРОВЕРКА ВОЗРАСТА НА АЛЬФА / АЛЬФАТЕХФОРМ (СТРОГО ДО 50 ЛЕТ ДЛЯ МУЖЧИН!)
+    # -------------------------------------------------------------------------
+    cand_age = profile.get("age") or extract_age(combined_cand)
+    target_subj = profile.get("target_subject", "кандидат")
+    is_third_male = target_subj in ["брат", "муж", "сын", "друг"]
+    cand_gender = profile.get("gender") or extract_gender(combined_cand, cand_name)
+    if fac_key in ["ALFA", "ALFATECH"]:
+        if cand_age and cand_age > 50 and (is_third_male or cand_gender != "Жен"):
+            return (
+                "Здравствуйте! Благодарим за интерес к вакансии на нашем предприятии в Климовске.\n\n"
+                "К сожалению, по требованиям службы безопасности и регламенту производства согласование кандидатов мужского пола на данный объект возможно строго в возрасте до 50 лет.\n\n"
+                "Искренне желаем вам успехов в поиске подходящей работы!",
+                True,
+                f"Мужчина {cand_age} лет старше 50 (Альфа)"
+            )
+
     # =========================================================================
     # PRIMARY ENGINE: GOOGLE GEMINI LLM (Kupibilet / Tinkoff Style)
     # Полный живой анализ контекста диалога, мгновенная адаптация и естественный ответ
@@ -1121,19 +1151,8 @@ def process_valeria_chat(chat_id: str, cand_name: str, item_title: str, msgs: li
             vacancy_code = m_code.group(1).strip()
     ad_description = f"{item_details.get('description', '')} {deal_comments}"
 
-    # Проактивная отправка ссылки в МАКС, если рекрутер уже созвонился и перевел сделку в запрос паспорта/направление
+    # Если последнее сообщение отправлено нами (ассистентом) — ожидаем ответ соискателя
     if last_msg.get('author_id') == active_user_id:
-        if deal_stage in ['UC_REQ_PASSPORT', 'UC_ITCFIF', 'PREPAYMENT_INVOICE']:
-            has_max_sent = any("max.ru" in m.get('content', {}).get('text', '') for m in msgs[-5:] if m.get('author_id') == active_user_id)
-            if not has_max_sent:
-                fac_key = detect_facility(item_title, vacancy_code=vacancy_code, description=ad_description)
-                proactive_text = generate_max_invite_reply(fac_key, deal_id, cand_name=cand_name or "Валерия", already_sent=False)
-                print(f"\n[{datetime.datetime.now().strftime('%H:%M:%S')}] 🚀 ПРОАКТИВНАЯ ОТПРАВКА ССЫЛКИ В МАКС (стадия CRM: {deal_stage}):")
-                print(proactive_text)
-                res = active_client.send_message(chat_id, proactive_text)
-                print(f"✅ Отправлено в Авито{cab_label}! ID: {res.get('id', 'ok')}")
-                active_client.mark_chat_as_read(chat_id)
-                return True
         return False
 
     valeria_text = last_msg.get('content', {}).get('text', '').strip()
@@ -1158,13 +1177,24 @@ def process_valeria_chat(chat_id: str, cand_name: str, item_title: str, msgs: li
             ]):
                 last_close_idx = idx
 
+    # Если ранее уже был озвучен отказ или завершение диалога:
+    if last_close_idx != -1 and not is_explicit_restart:
+        t_clean = re.sub(r'[^а-яёa-z\s]', '', valeria_text.lower()).strip()
+        courtesy_words = [
+            "я понял вас", "понял вас", "я понял", "понял", "поняла", "я поняла",
+            "спасибо вам большое", "спасибо большое", "спасибо", "спасибо вам",
+            "ясно", "понятно", "хорошо", "ок", "добро", "до свидания", "жаль",
+            "всего доброго", "договорились", "ладно", "понятно спасибо", "благодарю",
+            "ок спасибо", "хорошо спасибо", "будем искать", "до связи"
+        ]
+        if t_clean in courtesy_words or (len(t_clean) < 18 and any(w in t_clean for w in ["понял", "поняла", "спасибо", "ясно", "ладно", "жаль", "добро"])):
+            print(f"🛑 [ДИАЛОГ ЗАКРЫТ] Кандидат подтвердил отказ вежливостью ('{valeria_text}'). Автоответ не требуется, молчим.")
+            return False
+
     if is_explicit_restart:
         active_msgs = [last_msg]
         reset_session_profile(chat_id)
         print("🔄 Обнаружена команда полного сброса диалога! Начинаем с чистого листа.")
-    elif last_close_idx != -1:
-        active_msgs = msgs[last_close_idx + 1:]
-        print(f"🔄 Предыдущая сессия была закрыта. Начинаем новую сессию (активных сообщений: {len(active_msgs)}).")
     else:
         active_msgs = msgs
 
