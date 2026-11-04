@@ -26,7 +26,7 @@ import re
 import sys
 import os
 import urllib3
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import traceback
 
@@ -351,7 +351,7 @@ MENU_TEXT = (
 
 
 ROTATION_STATE_FILE = os.path.join(os.path.dirname(__file__), "broadcast_rotation_state.json")
-ACTIVE_RECRUITERS_ROTATION = [84102, 81596, 84822, 32]  # Анастасия Давыдова, Маргарита Бабынина, Анна Боркина, Наталья Кучма
+ACTIVE_RECRUITERS_ROTATION = [84102, 81596, 84822]  # Наталья 32 отключена  # Анастасия Давыдова, Маргарита Бабынина, Анна Боркина, Наталья Кучма
 
 def get_next_recruiter_for_lead():
     idx = 0
@@ -477,6 +477,205 @@ def sync_sms_candidate_to_b24(phone: str, facility_name: str = None, vac_code: s
             return str(deal_id)
     return None
 
+RECRUITERS_MAP = {
+    84102: {"name": "Анастасия Давыдова", "phone": "+7 (986) 089-82-06"},
+    81596: {"name": "Маргарита Бабынина", "phone": "+7 (967) 787-53-02"},
+    84822: {"name": "Анна Боркина", "phone": "+7 (986) 089-81-98"},
+    32: {"name": "Наталья Кучма", "phone": "+7 (967) 787-53-01"}
+}
+
+def get_object_chat_id(facility_name: str) -> str:
+    """Определяет ID целевого чата подбора в МАКС по названию объекта."""
+    if not facility_name:
+        return "-72008292324686"
+    f = facility_name.lower()
+    if any(k in f for k in ["аби", "владимир", "мяс"]):
+        return "-72039570639374"
+    elif any(k in f for k in ["арник", "раменск"]):
+        return "-76617943583246"
+    elif any(k in f for k in ["фарм", "цвет", "опалих", "чай"]):
+        return "-76183863200270"
+    elif any(k in f for k in ["бьют", "лайф"]):
+        return "-74468151757326"
+    elif any(k in f for k in ["запчаст", "китай", "подольск", "автозапчаст", "альфа"]):
+        return "-73311326538254"
+    elif any(k in f for k in ["тепофол", "кашир", "утеплит"]):
+        return "-75926237514254"
+    else:
+        return "-72008292324686"
+
+def extract_ready_date_info(text: str) -> tuple:
+    """Возвращает (date_text, date_iso_YYYY-MM-DD)."""
+    if not text:
+        return "", ""
+    t = text.lower()
+    now = datetime.now()
+    year = now.year
+
+    months = {
+        'январ': 1, 'феврал': 2, 'март': 3, 'апрел': 4, 'ма': 5, 'июн': 6,
+        'июл': 7, 'август': 8, 'сентябр': 9, 'октябр': 10, 'ноябр': 11, 'декабр': 12
+    }
+
+    # 1. '9 числа' / '12-го числа'
+    m_num = re.search(r'\b(?:вые(?:хать|зд|ду)|заезд|готов|числа|с|на)?\s*(\d{1,2})\s*(?:-?[г|о]+го)?\s*числа\b', t)
+    if not m_num:
+        m_num = re.search(r'\b(\d{1,2})\s*(?:-?[г|о]+го)?\s*числа\b', t)
+    if m_num:
+        day = int(m_num.group(1))
+        if 1 <= day <= 31:
+            month = now.month
+            if day < now.day:
+                month = 1 if month == 12 else month + 1
+                year = year + 1 if month == 1 else year
+            return f"{day} числа", f"{year:04d}-{month:02d}-{day:02d}"
+
+    # 2. '9 ноября' / '15 декабря'
+    m_month = re.search(r'\b(\d{1,2})\s+([а-яё]+)\b', t)
+    if m_month:
+        day = int(m_month.group(1))
+        m_word = m_month.group(2)
+        for k, m_num_val in months.items():
+            if m_word.startswith(k) and 1 <= day <= 31:
+                return f"{day} {m_word}", f"{year:04d}-{m_num_val:02d}-{day:02d}"
+
+    # 3. '09.11' or '09.11.2026'
+    m_dot = re.search(r'\b(\d{1,2})\.(\d{1,2})(?:\.(\d{2,4}))?\b', t)
+    if m_dot:
+        d, m = int(m_dot.group(1)), int(m_dot.group(2))
+        y = int(m_dot.group(3)) if m_dot.group(3) else year
+        if y < 100:
+            y += 2000
+        return m_dot.group(0), f"{y:04d}-{m:02d}-{d:02d}"
+
+    # 4. 'завтра', 'послезавтра', 'сегодня'
+    if 'послезавтра' in t:
+        target = now + timedelta(days=2)
+        return 'послезавтра', target.strftime('%Y-%m-%d')
+    if 'завтра' in t:
+        target = now + timedelta(days=1)
+        return 'завтра', target.strftime('%Y-%m-%d')
+    if 'сегодня' in t or 'хоть сейчас' in t:
+        return 'сегодня', now.strftime('%Y-%m-%d')
+
+    return "", ""
+
+def forward_candidate_to_selection_chat(session: dict, attachments: list, state: dict):
+    """
+    Пересылает фото паспорта и выжимку по кандидату в нужный групповой чат подбора МАКС,
+    переводит сделку в Bitrix24 в статус 'Направлен на смену' (PREPAYMENT_INVOICE)
+    и шлет колокольчик-уведомление ответственному рекрутеру.
+    """
+    deal_id = session.get("deal_id")
+    facility = session.get("facility") or "АБИ Владимир"
+    phone = session.get("phone") or "Не указан"
+    zaezd_date = session.get("ready_date") or session.get("ready_date_iso") or "Уточняется"
+
+    fio = "Кандидат"
+    age = session.get("age") or "Не указан"
+    citizenship = session.get("citizenship") or "РФ"
+    responsible_id = None
+    responsible_name = "Рекрутер"
+
+    if deal_id:
+        try:
+            d_res = b24_sync.call_b24("crm.deal.get", {"id": deal_id})
+            deal_info = d_res.get("result", {})
+            if deal_info:
+                responsible_id = deal_info.get("ASSIGNED_BY_ID")
+                b24_zaezd = deal_info.get("UF_CRM_1768816817128") or deal_info.get("UF_CRM_1780991278280")
+                if b24_zaezd and (zaezd_date == "Уточняется" or not zaezd_date):
+                    zaezd_date = str(b24_zaezd)[:10]
+
+                if deal_info.get("UF_CRM_1768816798") and age == "Не указан":
+                    age = str(deal_info.get("UF_CRM_1768816798"))
+                if deal_info.get("UF_CRM_1768816805") and citizenship == "РФ":
+                    citizenship = str(deal_info.get("UF_CRM_1768816805"))
+
+                cid = deal_info.get("CONTACT_ID")
+                if cid:
+                    c_res = b24_sync.call_b24("crm.contact.get", {"id": cid}).get("result", {})
+                    c_name = f"{c_res.get('LAST_NAME', '')} {c_res.get('NAME', '')} {c_res.get('SECOND_NAME', '')}".strip()
+                    if c_name:
+                        fio = c_name
+                    c_phones = c_res.get("PHONE", [])
+                    if c_phones and isinstance(c_phones, list) and c_phones[0].get("VALUE"):
+                        phone = c_phones[0].get("VALUE")
+
+                if fio == "Кандидат" and deal_info.get("TITLE"):
+                    t = deal_info.get("TITLE")
+                    t_clean = re.sub(r'\[.*?\]', '', t).strip()
+                    parts = [p.strip() for p in t_clean.split('|')]
+                    if parts and parts[0]:
+                        fio = parts[0]
+        except Exception as e:
+            print(f"[MAX BOT] Error fetching deal details for #{deal_id}: {e}", flush=True)
+
+    if responsible_id:
+        r_rec = RECRUITERS_MAP.get(int(responsible_id))
+        if r_rec:
+            responsible_name = r_rec["name"]
+        else:
+            try:
+                u_res = b24_sync.call_b24("user.get", {"ID": responsible_id}).get("result", [])
+                if u_res and isinstance(u_res, list):
+                    responsible_name = f"{u_res[0].get('LAST_NAME', '')} {u_res[0].get('NAME', '')}".strip()
+                else:
+                    responsible_name = f"ID {responsible_id}"
+            except Exception:
+                responsible_name = f"ID {responsible_id}"
+    else:
+        responsible_name = "Анастасия Давыдова"
+
+    target_chat_id = get_object_chat_id(facility)
+    chat_info = OBJECT_CHATS.get(target_chat_id, {})
+    chat_title = chat_info.get("title", "Подбор")
+
+    summary_text = (
+        f"📋 Новый кандидат на смену:\n"
+        f"👤 ФИО: {fio}\n"
+        f"🎂 Возраст: {age}\n"
+        f"🌍 Гражданство: {citizenship}\n"
+        f"📞 Телефон: {phone}\n"
+        f"🏢 Объект: {facility}\n"
+        f"📅 Дата заселения: {zaezd_date}\n"
+        f"💼 Ответственный: {responsible_name}"
+    )
+
+    photos_to_send = attachments or session.get("attachments") or []
+    send_max_message(chat_id=target_chat_id, text=summary_text, attachments=photos_to_send)
+    print(f"[MAX BOT] Кандидат {fio} переслан в чат '{chat_title}' ({target_chat_id})", flush=True)
+
+    if deal_id:
+        b24_sync.call_b24("crm.deal.update", {
+            "id": deal_id,
+            "fields": {
+                "STAGE_ID": "PREPAYMENT_INVOICE"
+            }
+        })
+        b24_sync.call_b24("crm.timeline.comment.add", {
+            "fields": {
+                "ENTITY_ID": deal_id,
+                "ENTITY_TYPE": "deal",
+                "COMMENT": (
+                    f"📋 [МАКС БОТ]: Кандидат прислал фото паспорта и подтвердил заезд ({zaezd_date}).\n"
+                    f"Выжимка и паспорт пересланы в чат подбора: {chat_title}.\n"
+                    f"Ответственный: {responsible_name}.\n"
+                    f"Сделка переведена в стадию [Направлен на смену]."
+                )
+            }
+        })
+        print(f"[MAX DIRECT] Сделка #{deal_id} переведена в [Направлен на смену]", flush=True)
+
+        if responsible_id:
+            try:
+                b24_sync.call_b24("im.notify.system.add", {
+                    "USER_ID": responsible_id,
+                    "MESSAGE": f"🚀 Кандидат {fio} ({phone}) направлен на смену на объект {facility}! Дата заселения: {zaezd_date}. Фото паспорта и выжимка отправлены в рабочий чат подбора."
+                })
+            except Exception as e_notif:
+                print(f"[MAX BOT] Error sending B24 notification: {e_notif}", flush=True)
+
 def handle_direct_dialog(user_id: int, text, attachments: list, state: dict):
     uid_str = str(user_id)
     session = state["user_sessions"].setdefault(uid_str, {
@@ -491,6 +690,12 @@ def handle_direct_dialog(user_id: int, text, attachments: list, state: dict):
         text = text.get("text") or text.get("body") or ""
     text_clean = str(text or "").strip()
     text_lower = text_clean.lower()
+
+    # Если кандидат уже направлен на смену — всегда подтверждаем бронь строго без номеров и ссылок
+    if session.get("step") == "COMPLETED" or session.get("forwarded_to_group"):
+        send_max_message(user_id=user_id, text="Вы записаны, бронь готова! С вами скоро свяжется рекрутер.")
+        return
+
 
     # 0. Разбор параметров deeplink (/start tag_dealid или /start tag)
     start_match = re.search(r'(?:/start|\bstart=|\butm_source=|\bstart\s+)\s*([a-zA-Z0-9_]+)', text_clean, re.IGNORECASE)
@@ -587,10 +792,30 @@ def handle_direct_dialog(user_id: int, text, attachments: list, state: dict):
 
     if has_photo:
         session["passport_received"] = True
+        if attachments:
+            session["attachments"] = attachments
         session["step"] = "PASSPORT_RECEIVED"
         save_state(state)
 
-    # 3. Если есть фото паспорта
+    # 3. Извлечение даты заселения из текста
+    d_text, d_iso = extract_ready_date_info(text_clean)
+    if d_iso:
+        session["ready_date"] = d_text
+        session["ready_date_iso"] = d_iso
+        save_state(state)
+        if session.get("deal_id"):
+            try:
+                b24_sync.call_b24("crm.deal.update", {
+                    "id": session["deal_id"],
+                    "fields": {
+                        "UF_CRM_1768816817128": d_iso,
+                        "UF_CRM_1780991278280": d_iso
+                    }
+                })
+            except Exception:
+                pass
+
+    # 4. Если есть фото паспорта (или получено ранее)
     if session.get("passport_received"):
         deal_id = session.get("deal_id")
         if not deal_id and session.get("phone"):
@@ -599,39 +824,62 @@ def handle_direct_dialog(user_id: int, text, attachments: list, state: dict):
                 deal_id = deal["ID"]
                 session["deal_id"] = deal_id
                 save_state(state)
+            else:
+                did = sync_sms_candidate_to_b24(session["phone"], session.get("facility"))
+                if did:
+                    deal_id = did
+                    session["deal_id"] = deal_id
+                    save_state(state)
 
-        if deal_id:
-            # Переводим в статус «Направлен на смену» (PREPAYMENT_INVOICE)
-            b24_sync.call_b24("crm.deal.update", {
-                "id": deal_id,
-                "fields": {
-                    "STAGE_ID": "PREPAYMENT_INVOICE"
-                }
-            })
-            b24_sync.call_b24("crm.timeline.comment.add", {
-                "fields": {
-                    "ENTITY_ID": deal_id,
-                    "ENTITY_TYPE": "deal",
-                    "COMMENT": "📄 [МАКС БОТ]: Кандидат прислал фото паспорта и подтвердил телефон. Данные переданы на оформление пропуска на КПП и бронирование общежития. Сделка переведена в [Направлен на смену]."
-                }
-            })
-            print(f"[MAX DIRECT] Сделка #{deal_id} переведена в [Направлен на смену]", flush=True)
-
-            fac_str = f" по объекту **{session.get('facility')}**" if session.get("facility") else ""
-            reply = (
-                f"Спасибо! Все данные успешно приняты{fac_str}. ✅\n\n"
-                "Фото паспорта передано в службу безопасности для заблаговременного оформления электронного пропуска на КПП и бронирования места на заселение.\n\n"
-                "Сейчас мы передаем информацию менеджеру объекта (бригадиру) и подключаем вас к нему — он выйдет на связь и скоординирует вас по точному времени встречи и заезду! 🤝"
-            )
-            send_max_message(user_id=user_id, text=reply)
-            return
-        elif not session.get("phone"):
+        # 4.1. Если еще нет номера телефона — просим номер
+        if not session.get("phone"):
             reply = (
                 "Фото паспорта принято! ✅\n\n"
-                "Чтобы привязать пропуск к вашей заявке на вахту, **напишите, пожалуйста, ваш контактный номер телефона** прямо сюда в чат."
+                "Чтобы зафиксировать вашу бронь на смену, **напишите, пожалуйста, ваш контактный номер телефона** прямо сюда в чат."
             )
             send_max_message(user_id=user_id, text=reply)
             return
+
+        # 4.2. Проверяем дату заселения
+        has_date = bool(session.get("ready_date_iso"))
+        if not has_date and deal_id:
+            try:
+                d_check = b24_sync.call_b24("crm.deal.get", {"id": deal_id}).get("result", {})
+                b24_d = d_check.get("UF_CRM_1768816817128") or d_check.get("UF_CRM_1780991278280")
+                if b24_d:
+                    has_date = True
+                    session["ready_date_iso"] = str(b24_d)[:10]
+                    save_state(state)
+            except Exception:
+                pass
+
+        # Если даты заселения еще нет — вежливо уточняем дату
+        if not has_date:
+            if session.get("step") == "AWAITING_DATE" and len(text_clean) > 1:
+                session["ready_date"] = text_clean[:50]
+                session["ready_date_iso"] = (datetime.now() + timedelta(days=2)).strftime('%Y-%m-%d')
+                has_date = True
+                save_state(state)
+            else:
+                reply = (
+                    "Фото паспорта принято! ✅\n\n"
+                    "На какую дату вы планируете заезд на смену (заселение)?"
+                )
+                send_max_message(user_id=user_id, text=reply)
+                session["step"] = "AWAITING_DATE"
+                save_state(state)
+                return
+
+        # 4.3. Кандидат квалифицирован: есть паспорт, телефон и дата заселения!
+        if not session.get("forwarded_to_group"):
+            forward_candidate_to_selection_chat(session, attachments or session.get("attachments"), state)
+            session["forwarded_to_group"] = True
+            session["step"] = "COMPLETED"
+            save_state(state)
+
+        # Ответ кандидату — СТРОГО БЕЗ НОМЕРОВ И ССЫЛОК:
+        send_max_message(user_id=user_id, text="Вы записаны, бронь готова! С вами скоро свяжется рекрутер.")
+        return
 
     # 4. Если кандидат ТОЛЬКО ЧТО прислал номер телефона — СРАЗУ СОЗДАЕМ/ОБНОВЛЯЕМ СДЕЛКУ В БИТРИКС24!
     if new_phone_provided:
@@ -746,6 +994,7 @@ def handle_group_chat_message(chat_id: str, sender_name: str, text, attachments:
         text = text.get("text") or text.get("body") or ""
     text_clean = str(text or "").strip()
     text_lower = text_clean.lower()
+
     
     chat_info = OBJECT_CHATS.get(str(chat_id), {})
     default_facility = chat_info.get("facility") or f"Объект МАКС (ID {chat_id})"

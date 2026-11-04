@@ -60,7 +60,7 @@ RECRUITERS = {
         "name": "Наталья Кучма",
         "uis_employee_id": 10357418,
         "virtual_phone": "79677875301",
-        "active": True   # ВКЛЮЧЕНО
+        "active": False   # ВКЛЮЧЕНО
     },
     84822: {
         "name": "Анна Боркина",
