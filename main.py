@@ -76,6 +76,17 @@ def ensure_threads_alive():
 pings_history = []
 
 @app.get("/")
+@app.get("/git-version")
+def git_version():
+    import subprocess
+    try:
+        commit = subprocess.check_output(['git', 'rev-parse', 'HEAD']).decode('utf-8').strip()
+        msg = subprocess.check_output(['git', 'log', '-1', '--pretty=%B']).decode('utf-8').strip()
+    except Exception as e:
+        commit = str(e)
+        msg = ""
+    return {"commit": commit, "message": msg}
+
 @app.get("/health")
 @app.get("/healthz")
 def healthcheck(request: Request):
