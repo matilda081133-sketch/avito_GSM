@@ -633,11 +633,40 @@ def sync_candidate_to_b24_deal(chat_id: str, cand_data: dict, is_disqualified: b
         # Дальше, если ответственный менеджер закрепился и обработал кандидата,
         # кандидат закрепляется за ним НАВСЕГДА. Только вручную можно сменить ответственного!
         # =====================================================================
+        # =====================================================================
+        # СТРОЖАЙШИЙ ЗАПРЕТ: НИКАКИХ СДЕЛОК В «НОВЫЙ ОТКЛИК» ДЛЯ АРХИВНЫХ ДИАЛОГОВ!
+        # Если сделка уже закрыта в LOSE или кандидат из архива, исходящие сообщения
+        # ассистента КАТЕГОРИЧЕСКИ НЕ ДОЛЖНЫ создавать новую сделку или возвращать её в NEW!
+        # =====================================================================
+        if current_deal and current_deal.get('STAGE_ID') == 'LOSE':
+            print(f'[B24 SYNC] 🛑 Чат {chat_id} привязан к архивной сделке #{current_deal.get("ID")} (LOSE). Возврат в NEW СТРОГО ЗАПРЕЩЕН!', flush=True)
+            try:
+                call_b24('crm.timeline.comment.add', {
+                    'fields': {
+                        'ENTITY_ID': current_deal.get('ID'),
+                        'ENTITY_TYPE': 'deal',
+                        'COMMENT': f'ℹ️ [Архивный диалог] Зафиксирована переписка по чату {chat_id}. Сделка оставлена в архиве (LOSE) согласно регламенту.'
+                    }
+                })
+            except Exception:
+                pass
+            return DealSyncResult(current_deal.get('ID'), current_deal.get('ASSIGNED_BY_ID'), False)
+
         if not deal_id:
-            # СТРОГИЙ РЕГЛАМЕНТ: если номера телефона нет и кандидат не дисквалифицирован,
-            # сделку в CRM НЕ создаем до тех пор, пока не узнаем номер (в чате или из Авито)!
-            if not phone and not is_disqualified:
-                print(f"[B24 SYNC] Отклик в чате {chat_id}: номер еще не получен. Сделка в CRM НЕ создается до получения контакта.", flush=True)
+            # Проверяем, нет ли уже архивной сделки по этому контакту/телефону/имени
+            if phone or name:
+                c_filter = {'=PHONE': phone} if phone else {'=NAME': name}
+                exist_c = call_b24('crm.contact.list', {'filter': c_filter, 'select': ['ID', 'DATE_CREATE']}).get('result', [])
+                if exist_c:
+                    old_cid = exist_c[0]['ID']
+                    prev_deals = call_b24('crm.deal.list', {'filter': {'=CONTACT_ID': old_cid}, 'select': ['ID', 'STAGE_ID']}).get('result', [])
+                    if any(pd.get('STAGE_ID') == 'LOSE' for pd in prev_deals):
+                        print(f'[B24 SYNC] 🛑 Контакт #{old_cid} уже имеет сделку в архиве (LOSE). Создание дубля в NEW СТРОГО ЗАПРЕЩЕНО!', flush=True)
+                        return DealSyncResult(None, None, False)
+
+            # Если кандидат еще не оставил телефон, пустую сделку НЕ создаем
+            if not phone:
+                print(f'[B24 SYNC] Пропуск создания сделки для чата {chat_id}: нет телефона. В CRM пустые сделки не создаем.', flush=True)
                 return DealSyncResult(None, None, False)
 
             # Новая сделка — распределяем дежурного рекрутера по очереди
