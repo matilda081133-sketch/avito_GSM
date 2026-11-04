@@ -782,8 +782,19 @@ def sync_candidate_to_b24_deal(chat_id: str, cand_data: dict, is_disqualified: b
         is_age_disqualified = False
         try:
             cand_age_num = int(age) if age and str(age).isdigit() else 0
-            if cand_age_num > 0 and (cand_age_num < 20 or cand_age_num > 55):
-                is_age_disqualified = True
+            if cand_age_num > 0:
+                # Проверка специфики объекта (на Альфатехформ строго до 45 лет!)
+                comb_check = f"{upd_fields.get('UF_CRM_1775470003043', '')} {upd_fields.get('UF_CRM_1768815865773', '')} {upd_fields.get('TITLE', '')} {comments}".lower()
+                is_alfa = any(w in comb_check for w in ["альфатехформ", "альфатех", "3124", "климовск", "rbg_alf"])
+                
+                if is_alfa:
+                    if cand_age_num < 19 or cand_age_num > 45:
+                        is_age_disqualified = True
+                        disqualify_reason = f"Возраст {cand_age_num} лет (на Альфатехформ строго до 45 лет)"
+                else:
+                    if cand_age_num < 20 or cand_age_num > 55:
+                        is_age_disqualified = True
+                        disqualify_reason = f"Возраст {cand_age_num} лет (допустимо 20-55 лет)"
         except Exception:
             pass
 
