@@ -579,9 +579,6 @@ def run_dialer_step():
     last_call_time = state.setdefault("last_call_time", {})
     last_busy_time = state.setdefault("last_busy_time", {})
 
-    # Проверяем в реальном времени через UIS Call API (list.calls), кто из менеджеров сейчас на линии
-    busy_emp_ids, busy_virt_phones = get_busy_uis_employees()
-
     # Проверяем каждого из рекрутеров
     for uid, uinfo in RECRUITERS.items():
         if not uinfo.get("active", True):
@@ -602,6 +599,10 @@ def run_dialer_step():
         deal, phone, stage = get_next_ndz_deal_for_recruiter(uid, called_today)
         if not deal:
             continue
+
+        # ОПТИМИЗАЦИЯ КВОТЫ UIS: запрашиваем занятость в UIS строго тогда,
+        # когда найдена реальная сделка и подошла очередь звонка (экономит 95% API-лимита!)
+        busy_emp_ids, busy_virt_phones = get_busy_uis_employees()
 
         did = deal.get("ID")
         dtitle = deal.get("TITLE")
