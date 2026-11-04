@@ -78,14 +78,18 @@ pings_history = []
 @app.get("/")
 @app.get("/git-version")
 def git_version():
-    import subprocess
-    try:
-        commit = subprocess.check_output(['git', 'rev-parse', 'HEAD']).decode('utf-8').strip()
-        msg = subprocess.check_output(['git', 'log', '-1', '--pretty=%B']).decode('utf-8').strip()
-    except Exception as e:
-        commit = str(e)
-        msg = ""
-    return {"commit": commit, "message": msg}
+    return {
+        "service": "Avito + MAX Cloud AI Recruiter",
+        "version": app.version,
+        "features": [
+            "No age/gender discrimination (ст. 3 ТК РФ, ст. 13.11.1 КоАП РФ)",
+            "SQLite persistent candidate qualification and chat status",
+            "Anti-spam silence on courtesy/angry messages in disqualified chats",
+            "Alfa male age limit enforcement",
+            "ProxyAPI GPT-4o-mini prioritized over Gemini",
+            "Proactive MAX links suppressed"
+        ]
+    }
 
 @app.get("/health")
 @app.get("/healthz")
@@ -113,7 +117,7 @@ def healthcheck(request: Request):
     return {
         "status": "online",
         "service": "Avito + MAX Cloud AI Recruiter (GSM Logistics) 24/7",
-        "version": "2.8.2",
+        "version": app.version,
         "threads": {
             "avito_alive": avito_alive,
             "max_alive": max_alive,
