@@ -652,85 +652,15 @@ def sync_candidate_to_b24_deal(chat_id: str, cand_data: dict, is_disqualified: b
                 pass
             return DealSyncResult(current_deal.get('ID'), current_deal.get('ASSIGNED_BY_ID'), False)
 
+        # =====================================================================
+        # СТРОЖАЙШЕЕ ПРАВИЛО: API НИКОГДА НЕ СОЗДАЕТ СДЕЛКИ!
+        # Сделки в CRM создаются ИСКЛЮЧИТЕЛЬНО через Wappi (чаты Авито) и UIS (звонки).
+        # API-ассистент имеет право ТОЛЬКО обогащать существующие сделки.
+        # Любое создание сделок через API полностью отключено во избежание дублирования!
+        # =====================================================================
         if not deal_id:
-            # Проверяем, нет ли уже архивной сделки по этому контакту/телефону/имени
-            if phone or name:
-                c_filter = {'=PHONE': phone} if phone else {'=NAME': name}
-                exist_c = call_b24('crm.contact.list', {'filter': c_filter, 'select': ['ID', 'DATE_CREATE']}).get('result', [])
-                if exist_c:
-                    old_cid = exist_c[0]['ID']
-                    prev_deals = call_b24('crm.deal.list', {'filter': {'=CONTACT_ID': old_cid}, 'select': ['ID', 'STAGE_ID']}).get('result', [])
-                    if any(pd.get('STAGE_ID') == 'LOSE' for pd in prev_deals):
-                        print(f'[B24 SYNC] 🛑 Контакт #{old_cid} уже имеет сделку в архиве (LOSE). Создание дубля в NEW СТРОГО ЗАПРЕЩЕНО!', flush=True)
-                        return DealSyncResult(None, None, False)
-
-            # Если кандидат еще не оставил телефон, пустую сделку НЕ создаем
-            if not phone:
-                print(f'[B24 SYNC] Пропуск создания сделки для чата {chat_id}: нет телефона. В CRM пустые сделки не создаем.', flush=True)
-                return DealSyncResult(None, None, False)
-
-            # Новая сделка — распределяем дежурного рекрутера по очереди
-            responsible_id = get_next_recruiter_id()
-            facility_name = cand_data.get('facility') or extract_facility_name(text=vacancy, comments="")
-            proj_enum = cand_data.get('project_enum') or get_project_enum_id(facility_name, vacancy)
-            is_vahta = "вахт" in (vacancy or "").lower() or "вахт" in (facility_name or "").lower()
-            
-            # Строгий формат: [Объект] Имя Фамилия | Номер телефона
-            parts = [f"[{facility_name}]"]
-            body_parts = []
-            if name:
-                clean_n = " ".join([p.capitalize() for p in name.split()[:2]])
-                body_parts.append(clean_n)
-            if phone:
-                body_parts.append(phone)
-            if not body_parts:
-                body_parts.append("Кандидат")
-
-            init_stage = 'NEW'
-            init_cat_id = 0
-            # Передвижение по воронкам и стадиям ОТКЛЮЧЕНО: все новые сделки только в воронке 0 на стадии NEW
-
-            # Определение корректного источника по кабинету отклика
-            cab_key = cand_data.get('source_id') or cand_data.get('cabinet_user_id') or cand_data.get('cabinet_name')
-            target_source = CABINET_TO_SOURCE.get(cab_key, cand_data.get('source_id', 'UC_25GHWZ'))
-
-            deal_fields = {
-                'TITLE': f"{parts[0]} {' | '.join(body_parts)}",
-                'STAGE_ID': init_stage,
-                'SOURCE_ID': target_source,
-                'ASSIGNED_BY_ID': responsible_id,
-                'UF_CRM_1770280572875': f"https://www.avito.ru/profile/messenger/channel/{chat_id}",
-                'UF_CRM_1775470003043': facility_name,
-                'UF_CRM_1768815865773': proj_enum,
-                'UF_CRM_1768817930019': cand_data.get('vacancy', ''),
-                'UF_CRM_1768819383825': cand_data.get('vacancy_url', ''),
-                'UF_CRM_1768816011673': name or '',
-                'UF_CRM_1768816356722': str(age) if age else ''
-            }
-            if init_cat_id:
-                deal_fields['CATEGORY_ID'] = init_cat_id
-            if is_disqualified:
-                deal_fields['UF_CRM_1768823747857'] = '204'  # Причина неуспеха: Нецелевой
-
-            cit_val = cand_data.get('citizenship') or ''
-            cit_enum, _ = detect_citizenship_from_text(cit_val)
-            if cit_enum:
-                deal_fields['UF_CRM_1768816331873'] = cit_enum
-
-            city_val = cand_data.get('district') or cand_data.get('city') or ''
-            city_name, city_id = detect_city_from_text(city_val)
-            if city_name:
-                deal_fields['UF_CRM_1768816641561'] = city_name
-            if city_id:
-                deal_fields['UF_CRM_1768816560167'] = city_id
-
-            deal_fields['UF_CRM_1768816742475'] = '98' if is_vahta else '96'
-            deal_fields['UF_CRM_1768827146250'] = '212' if is_vahta else '214'
-
-            d_res = call_b24('crm.deal.add', {'fields': deal_fields})
-            deal_id = d_res.get('result')
-            print(f"[B24 SYNC] Создана новая сделка #{deal_id} (Менеджер {responsible_id}) для чата {chat_id}")
-            current_deal = deal_fields
+            print(f"[B24 SYNC] ℹ️ Сделка для чата {chat_id} не найдена в CRM. Создание сделок через API отключено — сделки создаются исключительно Wappi (Авито) и UIS (звонки).", flush=True)
+            return DealSyncResult(None, None, False)
         else:
             # Сделка уже существовала ранее: СТРОГО СОХРАНЯЕМ СУЩЕСТВУЮЩЕГО ОТВЕТСТВЕННОГО!
             responsible_id = existing_assigned if existing_assigned else get_next_recruiter_id()
