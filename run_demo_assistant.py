@@ -1635,18 +1635,9 @@ def sync_passport_requests_to_avito(max_age_hours: float = 48.0) -> int:
     return sent_count
 
 if __name__ == "__main__":
-    print(f"\n🚀 AI-Рекрутер GSM Logistics запущен в режиме КАБИНЕТА 'Прямой работодатель' (ID: {AVITO_USER_ID})!", flush=True)
-    print("🎯 Ассистент строго привязывается к объявлению отклика, дает точные условия и передает код вакансии в CRM.\n", flush=True)
-    
-    poll_count = 0
-    while True:
-        try:
-            poll_count += 1
-            found = check_and_reply_valeria()
-            if not found and poll_count % 6 == 0:
-                print(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] Ожидание новых входящих откликов на Авито... (проверено {poll_count} раз)", flush=True)
-        except Exception as e:
-            print(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] Ошибка в цикле опроса: {e}", flush=True)
-            import traceback
-            traceback.print_exc()
-        time.sleep(10)
+    print("\n" + "=" * 70)
+    print("🛑 [SAFETY LOCK] ПРЯМОЙ ЗАПУСК АССИСТЕНТА НА ЭТОМ КОМПЬЮТЕРЕ ЗАБЛОКИРОВАН!")
+    print("Боевой AI-рекрутер работает ИСКЛЮЧИТЕЛЬНО в облаке на сервере Render 24/7 (main.py).")
+    print("Локальный опрос отключен, чтобы исключить задвоение сообщений кандидатам.")
+    print("=" * 70 + "\n")
+    sys.exit(0)

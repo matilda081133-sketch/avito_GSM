@@ -350,12 +350,34 @@ MENU_TEXT = (
 )
 
 
+ROTATION_STATE_FILE = os.path.join(os.path.dirname(__file__), "broadcast_rotation_state.json")
+ACTIVE_RECRUITERS_ROTATION = [84102, 81596, 84822, 32]  # Анастасия Давыдова, Маргарита Бабынина, Анна Боркина, Наталья Кучма
+
+def get_next_recruiter_for_lead():
+    idx = 0
+    try:
+        if os.path.exists(ROTATION_STATE_FILE):
+            with open(ROTATION_STATE_FILE, "r", encoding="utf-8") as rf:
+                data = json.load(rf)
+                idx = data.get("next_idx", 0)
+    except Exception:
+        pass
+    assigned_id = ACTIVE_RECRUITERS_ROTATION[idx % len(ACTIVE_RECRUITERS_ROTATION)]
+    next_idx = (idx + 1) % len(ACTIVE_RECRUITERS_ROTATION)
+    try:
+        with open(ROTATION_STATE_FILE, "w", encoding="utf-8") as wf:
+            json.dump({"next_idx": next_idx, "last_assigned": assigned_id}, wf)
+    except Exception:
+        pass
+    return assigned_id
+
 def sync_sms_candidate_to_b24(phone: str, facility_name: str = None, vac_code: str = None):
     """
     Создает или обновляет сделку в Битрикс24 при получении номера:
     - Источник: Рассылка MAX (MAX_BROADCAST)
     - Название: {Объект} - {Номер}
     - Обязательно код вакансии (UF_CRM_1768815865773) и название (UF_CRM_1775470003043)
+    - Ответственный: Строго боевые рекрутеры по ротации (Анастасия, Маргарита, Анна, Наталья)
     """
     if not phone:
         return None
@@ -363,6 +385,8 @@ def sync_sms_candidate_to_b24(phone: str, facility_name: str = None, vac_code: s
     if clean_p.startswith('8') and len(clean_p) == 11:
         clean_p = '7' + clean_p[1:]
     fmt_phone = f"+{clean_p}"
+
+    assigned_recruiter = get_next_recruiter_for_lead()
 
     fac = facility_name or "Вахта"
     code = vac_code
@@ -390,7 +414,8 @@ def sync_sms_candidate_to_b24(phone: str, facility_name: str = None, vac_code: s
             'fields': {
                 'NAME': 'Кандидат Вахта',
                 'PHONE': [{'VALUE': fmt_phone, 'VALUE_TYPE': 'WORK'}],
-                'SOURCE_ID': 'MAX_BROADCAST'
+                'SOURCE_ID': 'MAX_BROADCAST',
+                'ASSIGNED_BY_ID': assigned_recruiter
             }
         })
         contact_id = nc.get('result')
@@ -399,25 +424,29 @@ def sync_sms_candidate_to_b24(phone: str, facility_name: str = None, vac_code: s
     deal = find_b24_deal_by_phone(clean_p)
     if deal:
         deal_id = deal["ID"]
+        fields_to_update = {
+            'TITLE': deal_title,
+            'SOURCE_ID': 'MAX_BROADCAST',
+            'UF_CRM_1775470003043': fac,
+            'UF_CRM_1768815865773': code,
+            'UF_CRM_1768827146250': '212',
+            'UF_CRM_1768816742475': '98'
+        }
+        if str(deal.get("ASSIGNED_BY_ID")) in ("82166", "", "None", "0"):
+            fields_to_update['ASSIGNED_BY_ID'] = assigned_recruiter
+
         b24_sync.call_b24('crm.deal.update', {
             'id': deal_id,
-            'fields': {
-                'TITLE': deal_title,
-                'SOURCE_ID': 'MAX_BROADCAST',
-                'UF_CRM_1775470003043': fac,
-                'UF_CRM_1768815865773': code,
-                'UF_CRM_1768827146250': '212',
-                'UF_CRM_1768816742475': '98'
-            }
+            'fields': fields_to_update
         })
         b24_sync.call_b24('crm.timeline.comment.add', {
             'fields': {
                 'ENTITY_ID': deal_id,
                 'ENTITY_TYPE': 'deal',
-                'COMMENT': f"📥 [РАССЫЛКА MAX]: Кандидат оставил номер {fmt_phone} и выбрал объект '{fac}' (код вакансии: {code}). Сделка обновлена."
+                'COMMENT': f"📥 [РАССЫЛКА MAX]: Кандидат оставил номер {fmt_phone} и выбрал объект '{fac}' (код вакансии: {code}). Ответственный рекрутер ID {assigned_recruiter}."
             }
         })
-        print(f"[B24 SYNC] Сделка #{deal_id} обновлена: {deal_title} (код {code})", flush=True)
+        print(f"[B24 SYNC] Сделка #{deal_id} обновлена: {deal_title} (код {code}, ответственный: {assigned_recruiter})", flush=True)
         return str(deal_id)
     else:
         # 3. Создание новой сделки
@@ -428,6 +457,7 @@ def sync_sms_candidate_to_b24(phone: str, facility_name: str = None, vac_code: s
                 'STAGE_ID': 'NEW',
                 'SOURCE_ID': 'MAX_BROADCAST',
                 'CONTACT_ID': contact_id,
+                'ASSIGNED_BY_ID': assigned_recruiter,
                 'UF_CRM_1775470003043': fac,
                 'UF_CRM_1768815865773': code,
                 'UF_CRM_1768827146250': '212',
@@ -440,10 +470,10 @@ def sync_sms_candidate_to_b24(phone: str, facility_name: str = None, vac_code: s
                 'fields': {
                     'ENTITY_ID': deal_id,
                     'ENTITY_TYPE': 'deal',
-                    'COMMENT': f"📥 [РАССЫЛКА MAX]: Новый отклик по СМС! Номер {fmt_phone}, объект '{fac}', код вакансии: {code}."
+                    'COMMENT': f"📥 [РАССЫЛКА MAX]: Новый отклик по СМС! Номер {fmt_phone}, объект '{fac}', код вакансии: {code}. Ответственный рекрутер ID {assigned_recruiter}."
                 }
             })
-            print(f"[B24 SYNC] СОЗДАНА НОВАЯ СДЕЛКА #{deal_id}: {deal_title} (код {code})", flush=True)
+            print(f"[B24 SYNC] СОЗДАНА НОВАЯ СДЕЛКА #{deal_id}: {deal_title} (код {code}, ответственный {assigned_recruiter})", flush=True)
             return str(deal_id)
     return None
 
