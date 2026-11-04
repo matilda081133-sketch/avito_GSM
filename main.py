@@ -31,7 +31,7 @@ from config import PORT, HOST, AVITO_CLIENT_ID, AVITO_CLIENT_SECRET, AVITO_USER_
 
 app = FastAPI(title="HR Cloud Autonomous Recruiter Service", version="2.8.2")
 
-ENABLE_AVITO_ASSISTANT = os.environ.get("ENABLE_AVITO_ASSISTANT", "False").lower() in ("true", "1", "yes")
+ENABLE_AVITO_ASSISTANT = os.environ.get("ENABLE_AVITO_ASSISTANT", "True").lower() in ("true", "1", "yes")
 ENABLE_MAX_BOT = os.environ.get("ENABLE_MAX_BOT", "True").lower() in ("true", "1", "yes")
 ENABLE_B24_ENHANCER = False  # ПОЛНОСТЬЮ ВЫКЛЮЧЕН: стадии и сделки вручную ведут рекрутеры
 
@@ -358,15 +358,12 @@ def run_avito_poller_thread():
     print(f"[CLOUD AVITO] Дежурный AI-рекрутер Авито запущен для {len(AVITO_CABINETS)} кабинетов: {cabs_info}.", flush=True)
     while True:
         try:
-            from run_demo_assistant import check_and_reply_valeria, sync_passport_requests_to_avito
+            from run_demo_assistant import check_and_reply_valeria
             poll_count = 0
             while True:
                 try:
                     poll_count += 1
                     check_and_reply_valeria()
-                    # Синхронизация сделок в стадии 'Запрос паспорта' каждые 36 секунд
-                    if poll_count % 3 == 0:
-                        sync_passport_requests_to_avito()
                     if poll_count % 15 == 0:
                         print(f"[CLOUD AVITO] Мониторинг всех {len(AVITO_CABINETS)} кабинетов активен (циклов: {poll_count}).", flush=True)
                     time.sleep(3)
