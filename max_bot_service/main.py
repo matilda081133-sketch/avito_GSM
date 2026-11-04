@@ -41,8 +41,11 @@ TOKEN = os.environ.get("MAX_BOT_TOKEN", "f9LHodD0cOK373_zW5FMjbf30myDzXbw3HF5hHB
 MAX_API_BASE = "https://platform-api2.max.ru"
 B24_WEBHOOK = os.environ.get("B24_WEBHOOK_URL", "https://b24-4qx38o.bitrix24.ru/rest/39250/7cbs7mg1qo0vn0ov/")
 
-# Резервный пул валидных API-ключей Google Gemini (5 рабочих ключей с авто-ротацией)
+# Боевой пул валидных активных API-ключей Google Gemini
 _KEYS_POOL = [
+    base64.b64decode("QVEuQWI4Uk42SnpIRm1URXI3dEZVVW1CRDQ0OVlibVplaXB5ejl4ZW5qa0x0Y3E3YXNVdkE=").decode('utf-8'),
+    base64.b64decode("QVEuQWI4Uk42SnRWcDJnenY3NWRwZzhJQkROa3Fwc1R5eEpYR2E4eVczWVphYjZFcjVlM3c=").decode('utf-8'),
+    base64.b64decode("QVEuQWI4Uk42SjJwNVZpaXRXMXl2TFRfeE4yajZqd2MxS0VQZktELUdpRWNTYm9fTFZpb0E=").decode('utf-8'),
     base64.b64decode("QVEuQWI4Uk42S0xiQURfTWVGOUJiN2F4S3pyaWNFbW9qaTlLSUgtdWZ0OW44c3FnNWpockE=").decode('utf-8'),
     base64.b64decode("QVEuQWI4Uk42Sm9NMHBkaFIzaWJmUm11ckdNcldrVklULXJtaGltY2dSdjZJTU9BdjJ4ZkE=").decode('utf-8'),
     base64.b64decode("QVEuQWI4Uk42Sl81aTlHUzFPd2hYUDd0MHB1emhxc0ZxdWlhNTlVY2RFVWpuQVdoSjRQeHc=").decode('utf-8'),
@@ -597,18 +600,10 @@ def call_gemini_llm(dialogue_transcript: str, user_message: str, cand_name: str 
                 print(f"[GEMINI LLM {model_name} ERR]: {e}", flush=True)
                 continue
 
-    # Контекстный ответ при сбое Gemini API (сохраняем контекст диалога соискателя):
-    c_low = context_hint.lower()
-    if "кашир" in c_low or "тепофол" in c_low:
-        return "Принято! По объекту Завод утеплителя «Тепофол» (г. Кашира) всё зафиксировала. Подскажите, на какую дату планируете выезд или пришлите фото 2-3 страницы паспорта для оформления бесплатного билета и пропуска на КПП!"
-    elif "владимир" in c_low or "аби" in c_low:
-        return "Принято! По объекту АБИ Владимир (мясное производство) всё зафиксировала. Подскажите, на какую дату планируете выезд или пришлите фото 2-3 страницы паспорта для оформления бесплатного билета и пропуска на КПП!"
-    elif "балаших" in c_low or "смарт" in c_low:
-        return "Принято! По объекту Смарт Family Балашиха (зоотовары Petshop) всё зафиксировала. Подскажите, на какую дату планируете выезд или пришлите фото 2-3 страницы паспорта для оформления бесплатного билета и пропуска на КПП!"
-    elif "спб" in c_low or "санкт" in c_low or "стандарт" in c_low:
-        return "Принято! По объекту Стандарт СПБ (оконный профиль) всё зафиксировала. Подскажите, на какую дату планируете выезд или пришлите фото 2-3 страницы паспорта для оформления бесплатного билета и пропуска на КПП!"
-    else:
-        return "Спасибо за сообщение! Подскажите, на какую дату вы планируете выезд на вахту, либо задайте ваш вопрос — я помогу подобрать лучший объект и оформить бесплатный билет!" 
+    # ЖЕСТКОЕ ТРЕБОВАНИЕ: ЕСЛИ ЛИМИТ НЕЙРОСЕТИ ИСЧЕРПАН (429 НА ВСЕХ КЛЮЧАХ) —
+    # БОТ КАТЕГОРИЧЕСКИ НЕ ДОЛЖЕН СПАМИТЬ ШАБЛОНАМИ! ОН ПОЛНОСТЬЮ МОЛЧИТ!
+    print(f"🛑 [GEMINI QUOTA EXHAUSTED] Все {len(keys_pool)} ключей исчерпали квоту! Бот остановлен и не отправляет сообщения.", flush=True)
+    return 
 
 
 # -------------------------------------------------------------
@@ -1592,6 +1587,9 @@ def handle_single_update(up: dict):
             cand_name=st.get("name", name),
             context_hint=context_hint
         )
+        if not ai_reply:
+            print(f"⏸️ [AI REPLY SILENCED] Нет ответа от нейросети (лимит исчерпан). Сообщение НЕ отправляется.", flush=True)
+            return
 
         # Если нейросеть запросила паспорт у кандидата, автоматически переводим сделку в «Запрос паспорта»
         if ("паспорт" in ai_reply.lower() or "разворот" in ai_reply.lower()) and st.get("deal_id"):

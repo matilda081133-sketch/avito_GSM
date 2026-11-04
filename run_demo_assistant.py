@@ -1362,11 +1362,21 @@ def check_and_reply_cabinet(cab_client: AvitoClient, cab_user_id: int, cab_name:
                 continue
             seen.add(cid)
             
-            # Если последнее сообщение отправлено нами или сотрудником — мы уже ответили, пропускаем
+            # 1. Если последнее сообщение отправлено нами или сотрудником — мы уже ответили, пропускаем
             last_msg_meta = c.get('last_message', {})
             last_author = last_msg_meta.get('author_id')
             if last_author in STAFF_USER_IDS or last_author == cab_user_id:
                 continue
+
+            # 2. КАТЕГОРИЧЕСКИЙ ЗАПРЕТ ОТВЕТОВ В СТАРЫЕ ИСТОРИЧЕСКИЕ ЧАТЫ (АВГУСТ, СЕНТЯБРЬ, ОКТЯБРЬ)!
+            # Если входящее сообщение старше 2 часов (7200 сек) — строго пропускаем, это архивный диалог!
+            msg_ts = last_msg_meta.get('created', 0)
+            if msg_ts:
+                # Преобразуем мс в сек если нужно
+                ts_sec = msg_ts / 1000.0 if msg_ts > 1e11 else float(msg_ts)
+                age_hours = (time.time() - ts_sec) / 3600.0
+                if age_hours > 2.0:
+                    continue
 
 
 
