@@ -705,6 +705,21 @@ def sync_candidate_to_b24_deal(chat_id: str, cand_data: dict, is_disqualified: b
         if city_id and not current_deal.get('UF_CRM_1768816560167'):
             upd_fields['UF_CRM_1768816560167'] = city_id
 
+        # Дата заселения / заезда на вахту (UF_CRM_1768816817128)
+        ready_date_iso = cand_data.get('ready_date_iso')
+        if ready_date_iso and not current_deal.get('UF_CRM_1768816817128'):
+            upd_fields['UF_CRM_1768816817128'] = ready_date_iso
+            try:
+                call_b24('crm.timeline.comment.add', {
+                    'fields': {
+                        'ENTITY_ID': deal_id,
+                        'ENTITY_TYPE': 'deal',
+                        'COMMENT': f"📅 Дата выезда/заселения: {cand_data.get('ready_date')} ({ready_date_iso})"
+                    }
+                })
+            except Exception:
+                pass
+
         # Строгий формат: [Объект] Имя Фамилия | Номер телефона
         # Все старые теги в скобках [СДС Химки], [Старый объект] полностью счищаются!
         parts = [f"[{facility_name}]"]

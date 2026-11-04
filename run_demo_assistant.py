@@ -970,17 +970,65 @@ def extract_city(text: str) -> str:
             return word.capitalize()
     return ""
 
-def extract_ready_date(text: str) -> str:
+def extract_ready_date_info(text: str) -> tuple[str, str]:
+    """Возвращает (date_text, date_iso_YYYY-MM-DD)."""
     if not text:
-        return ""
+        return "", ""
     t = text.lower()
-    m_date = re.search(r'\b(?:с\s+|на\s+)?((?:\d{1,2}\.(?:0?[1-9]|1[0-2]))|\d{1,2}\s+(?:январ[а-я]*|феврал[а-я]*|март[а-я]*|апрел[а-я]*|ма[яе]|июн[а-я]*|июл[а-я]*|август[а-я]*|сентябр[а-я]*|октябр[а-я]*|ноябр[а-я]*|декабр[а-я]*))\b', t)
-    if m_date:
-        return m_date.group(0)
-    for w in ["завтра", "послезавтра", "сегодня", "с понедельника", "в понедельник", "хоть сейчас", "на днях"]:
-        if w in t:
-            return w
-    return ""
+    now = datetime.datetime.now()
+    year = now.year
+
+    months = {
+        'январ': 1, 'феврал': 2, 'март': 3, 'апрел': 4, 'ма': 5, 'июн': 6,
+        'июл': 7, 'август': 8, 'сентябр': 9, 'октябр': 10, 'ноябр': 11, 'декабр': 12
+    }
+
+    # 1. '9 числа' / '12-го числа'
+    m_num = re.search(r'\b(?:вые(?:хать|зд|ду)|заезд|готов|числа|с|на)?\s*(\d{1,2})\s*(?:-?[г|о]+го)?\s*числа\b', t)
+    if not m_num:
+        m_num = re.search(r'\b(\d{1,2})\s*(?:-?[г|о]+го)?\s*числа\b', t)
+    if m_num:
+        day = int(m_num.group(1))
+        if 1 <= day <= 31:
+            month = now.month
+            if day < now.day:
+                month = 1 if month == 12 else month + 1
+                year = year + 1 if month == 1 else year
+            return f"{day} числа", f"{year:04d}-{month:02d}-{day:02d}"
+
+    # 2. '9 ноября' / '15 декабря'
+    m_month = re.search(r'\b(\d{1,2})\s+([а-яё]+)\b', t)
+    if m_month:
+        day = int(m_month.group(1))
+        m_word = m_month.group(2)
+        for k, m_num_val in months.items():
+            if m_word.startswith(k) and 1 <= day <= 31:
+                return f"{day} {m_word}", f"{year:04d}-{m_num_val:02d}-{day:02d}"
+
+    # 3. '09.11' or '09.11.2026'
+    m_dot = re.search(r'\b(\d{1,2})\.(\d{1,2})(?:\.(\d{2,4}))?\b', t)
+    if m_dot:
+        d, m = int(m_dot.group(1)), int(m_dot.group(2))
+        y = int(m_dot.group(3)) if m_dot.group(3) else year
+        if y < 100:
+            y += 2000
+        return m_dot.group(0), f"{y:04d}-{m:02d}-{d:02d}"
+
+    # 4. 'завтра', 'послезавтра', 'сегодня'
+    if 'послезавтра' in t:
+        target = now + datetime.timedelta(days=2)
+        return 'послезавтра', target.strftime('%Y-%m-%d')
+    if 'завтра' in t:
+        target = now + datetime.timedelta(days=1)
+        return 'завтра', target.strftime('%Y-%m-%d')
+    if 'сегодня' in t or 'хоть сейчас' in t:
+        return 'сегодня', now.strftime('%Y-%m-%d')
+
+    return "", ""
+
+def extract_ready_date(text: str) -> str:
+    txt, _ = extract_ready_date_info(text)
+    return txt
 
 def strip_name_greetings(text: str, has_previous_dialogue: bool = False) -> str:
     """Удаляет любые обращения по имени в начале сообщения, а в продолжающемся диалоге срезает повторные приветствия и фразы-паразиты."""
@@ -1397,6 +1445,7 @@ def process_valeria_chat(chat_id: str, cand_name: str, item_title: str, msgs: li
     cit = extract_citizenship(all_cand_texts) or "РФ"
     city = extract_city(all_cand_texts)
     gender = extract_gender(all_cand_texts)
+    ready_date_text, ready_date_iso = extract_ready_date_info(all_cand_texts)
 
     cand_data = {
         "name": cand_name or "Соискатель",
@@ -1406,6 +1455,8 @@ def process_valeria_chat(chat_id: str, cand_name: str, item_title: str, msgs: li
         "city": city,
         "district": city,
         "gender": gender,
+        "ready_date": ready_date_text,
+        "ready_date_iso": ready_date_iso,
         "vacancy": item_title or fac_info["title"],
         "vacancy_url": item_url or (f"https://www.avito.ru/{item_id}" if item_id else ""),
         "facility": facility_name,
