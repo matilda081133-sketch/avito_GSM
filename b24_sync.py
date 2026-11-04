@@ -761,9 +761,9 @@ def sync_candidate_to_b24_deal(chat_id: str, cand_data: dict, is_disqualified: b
         # =====================================================================
         # УМНЫЙ ФИЛЬТР (SMART GUARD):
         # 1. Если кандидат нецелевой (возраст < 20 или > 55, нет паспорта РФ):
-        #    -> STAGE_ID = 'LOSE', причина 136 (Возраст) или 138 (Гражданство)
+        #    -> STAGE_ID = 'LOSE', причина 3134 (Возраст) или 3136 (Гражданство)
         # 2. Если у кандидата нет номера телефона (пустой чат):
-        #    -> STAGE_ID = 'LOSE', причина 2686 (Перестал выходить на связь)
+        #    -> STAGE_ID = 'LOSE', причина 3132 (Номер отсутствует)
         # 3. Если кандидат прислал номер телефона:
         #    -> возвращаем из LOSE в работу (NEW)
         # =====================================================================
@@ -790,23 +790,28 @@ def sync_candidate_to_b24_deal(chat_id: str, cand_data: dict, is_disqualified: b
         if is_disqualified or is_age_disqualified:
             upd_fields['STAGE_ID'] = 'LOSE'
             if is_age_disqualified or 'возраст' in (disqualify_reason or '').lower():
-                upd_fields['UF_CRM_1768823747857'] = ['136']  # Возраст
+                upd_fields['UF_CRM_1768823747857'] = ['3134']  # Возраст
+                upd_fields['UF_CRM_1773129274833'] = '2862'    # Возраст (Направленные)
             elif 'гражданств' in (disqualify_reason or '').lower() or 'паспорт' in (disqualify_reason or '').lower():
-                upd_fields['UF_CRM_1768823747857'] = ['138']  # Гражданство
+                upd_fields['UF_CRM_1768823747857'] = ['3136']  # Гражданство
+                upd_fields['UF_CRM_1773129274833'] = '2864'    # Гражданство (Направленные)
             else:
-                upd_fields['UF_CRM_1768823747857'] = ['204']  # Нецелевой
+                upd_fields['UF_CRM_1768823747857'] = ['204']   # Нецелевой
+                upd_fields['UF_CRM_1773129274833'] = '2930'    # Иное
             print(f"[SMART GUARD] Сделка #{deal_id} переведена в LOSE: нецелевой ({disqualify_reason or 'возраст/гражданство'})", flush=True)
 
         elif not deal_phone:
             upd_fields['STAGE_ID'] = 'LOSE'
-            upd_fields['UF_CRM_1768823747857'] = ['2686']  # Перестал выходить на связь / Номер отсутствует
-            print(f"[SMART GUARD] Сделка #{deal_id} переведена в LOSE: отсутствует номер телефона", flush=True)
+            upd_fields['UF_CRM_1768823747857'] = ['3132']  # Номер отсутствует
+            upd_fields['UF_CRM_1773129274833'] = '2850'    # НДЗ/ неверный номер/ номер отсутствует
+            print(f"[SMART GUARD] Сделка #{deal_id} переведена в LOSE: отсутствует номер телефона (причина 3132: Номер отсутствует)", flush=True)
 
         elif deal_phone and current_deal and current_deal.get('STAGE_ID') == 'LOSE':
             old_reasons = current_deal.get('UF_CRM_1768823747857') or []
-            if '2686' in old_reasons or 2686 in old_reasons or not old_reasons:
+            if any(r in str(old_reasons) for r in ['3132', '2686']) or not old_reasons:
                 upd_fields['STAGE_ID'] = 'NEW'
                 upd_fields['UF_CRM_1768823747857'] = []
+                upd_fields['UF_CRM_1773129274833'] = ''
                 print(f"[SMART GUARD] Сделка #{deal_id} возвращена из архива в работу (получен номер {deal_phone})!", flush=True)
 
         if 'CATEGORY_ID' in upd_fields:
