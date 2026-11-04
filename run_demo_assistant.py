@@ -973,13 +973,20 @@ def extract_ready_date(text: str) -> str:
             return w
     return ""
 
-def strip_name_greetings(text: str) -> str:
-    """Удаляет любые обращения по имени в начале сообщения (например: 'Максим, добрый день' -> 'Добрый день')."""
+def strip_name_greetings(text: str, has_previous_dialogue: bool = False) -> str:
+    """Удаляет любые обращения по имени в начале сообщения, а в продолжающемся диалоге срезает повторные приветствия и фразы-паразиты."""
     if not text:
         return text
     text = re.sub(r'^[А-ЯЁA-Za-z][а-яёA-Za-z0-9_-]+,\s*(здравствуйте|добрый день|добрый вечер|приветствую)', r'\1', text, flags=re.IGNORECASE)
     text = re.sub(r'^(здравствуйте|добрый день|добрый вечер|приветствую)[,\s]+[А-ЯЁA-Za-z][а-яёA-Za-z0-9_-]+[!\.,\s]*', r'\1! ', text, flags=re.IGNORECASE)
     text = re.sub(r'^[А-ЯЁA-Za-z][а-яёA-Za-z0-9_-]+,\s*', '', text)
+    
+    if has_previous_dialogue:
+        text = re.sub(r'^(?:здравствуйте|добрый день|добрый вечер|приветствую)[!.,\s]*', '', text, flags=re.IGNORECASE).strip()
+    
+    # Срезаем фразу-паразит в конце
+    text = re.sub(r'(?:[.,!]?\s*жду вашего ответа!?\s*)+$', '', text, flags=re.IGNORECASE).strip()
+    
     text = text.strip()
     if text:
         text = text[0].upper() + text[1:]
@@ -1059,7 +1066,7 @@ def generate_human_reply(cand_text: str, ad_title: str, cand_history_only: str =
             ad_description=ad_description
         )
         if llm_reply and len(llm_reply.strip()) > 5:
-            llm_reply = strip_name_greetings(llm_reply)
+            llm_reply = strip_name_greetings(llm_reply, has_previous_dialogue=bool(our_history.strip()))
             
             # АНТИДИСКРИМИНАЦИОННЫЙ САНИТАЙЗЕР (ст. 3 ТК РФ, ст. 13.11.1 КоАП РФ, правила Авито):
             # Перехватываем любые попытки сослаться на цифры возраста или отказать со словами "вам X лет / до 55"
