@@ -1162,6 +1162,21 @@ def process_valeria_chat(chat_id: str, cand_name: str, item_title: str, msgs: li
     cand_disp = (cand_name or 'КАНДИДАТ').upper()
     print(f"\n[{datetime.datetime.now().strftime('%H:%M:%S')}]{cab_label} 🔥 СООБЩЕНИЕ ОТ {cand_disp} [{item_title}]: '{valeria_text}'")
 
+    # ЖЕСТКАЯ НЕСГОРАЕМАЯ ПАМЯТЬ ПО ЧАТУ (SQLite Database Check):
+    # Если чат уже дисквалифицирован (отказ по возрасту / гражданству):
+    profile_check = get_session_profile(chat_id)
+    if profile_check and profile_check.get("qualification_status") == "DISQUALIFIED":
+        t_clean = re.sub(r'[^а-яёa-z\s]', '', valeria_text.lower()).strip()
+        courtesy_words = [
+            "спасибо", "спасибо вам", "спасибо большое", "я понял", "понял вас",
+            "ясно", "понятно", "хорошо", "ок", "добро", "до свидания", "жаль",
+            "всего доброго", "ладно", "благодарю", "поняла", "я поняла", "до связи"
+        ]
+        if t_clean in courtesy_words or (len(t_clean) < 18 and any(w in t_clean for w in ["спасибо", "понял", "поняла", "ясно", "ладно", "жаль"])):
+            print(f"🛑 [ДИСКВАЛИФИЦИРОВАННЫЙ ЧАТ {chat_id}] Кандидат прислал вежливое подтверждение ('{valeria_text}'). Полная тишина, повторный отказ не шлем.")
+            active_client.mark_chat_as_read(chat_id)
+            return False
+
     # СБРОС СЕССИИ:
     is_explicit_restart = any(w in valeria_text.lower() for w in ["начнем с чистого листа", "с чистого листа", "начнем заново", "давай заново", "давай сначала", "начать сначала", "сброс диалога"])
 
@@ -1306,6 +1321,13 @@ def process_valeria_chat(chat_id: str, cand_name: str, item_title: str, msgs: li
     if not reply_text or not reply_text.strip():
         print(f"⏳ Пропускаем отправку в чат {chat_id}: ожидание генерации нейросетью.")
         return False
+
+    # Запись статуса дисквалификации в несгораемую базу данных SQLite
+    if is_disqualified:
+        profile["qualification_status"] = "DISQUALIFIED"
+        profile["disqualification_reason"] = disq_reason or "Дисквалификация по регламенту"
+        update_session_profile(chat_id, qualification_status="DISQUALIFIED", disqualification_reason=profile["disqualification_reason"])
+        print(f"🔒 [SQLite ПАМЯТЬ] Чат {chat_id} навсегда зафиксирован со статусом DISQUALIFIED ({profile['disqualification_reason']})")
 
     # ЗАЩИТА ОТ ДУБЛИРОВАНИЯ СООБЩЕНИЙ (ANTI-DUPLICATION)
     if our_msgs:
