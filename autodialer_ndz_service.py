@@ -39,7 +39,12 @@ sys.stdout.reconfigure(encoding='utf-8', line_buffering=True)
 B24_WEBHOOK_URL = "https://b24-4qx38o.bitrix24.ru/rest/39250/7cbs7mg1qo0vn0ov/"
 B24_NOTIFY_WEBHOOK_URL = "https://b24-4qx38o.bitrix24.ru/rest/82166/lhremlfdcravw215/"
 UIS_CALL_API_URL = "https://callapi.uiscom.ru/v4.0"
-UIS_ACCESS_TOKEN = "mf050x3n53jnp4dft29ww26x7jm4y33rd6sd5rgw"
+UIS_ACCESS_TOKENS = [
+    "mf050x3n53jnp4dft29ww26x7jm4y33rd6sd5rgw",  # Токен #1 (основной)
+    "yhnf7ukxduk42l54v3j3psuenis3ufqni3d80nrr"   # Токен #2 (резервный / расширение до 1000 звонков)
+]
+UIS_ACCESS_TOKEN = UIS_ACCESS_TOKENS[0]
+_current_token_idx = 0
 
 MSK_TZ = timezone(timedelta(hours=3))
 
@@ -83,19 +88,43 @@ def call_b24(method, params=None):
     return {}
 
 def call_uis_api(method, params=None):
-    payload = {
-        "jsonrpc": "2.0",
-        "id": int(time.time() * 1000),
-        "method": method,
-        "params": params or {}
-    }
-    payload["params"]["access_token"] = UIS_ACCESS_TOKEN
-    try:
-        r = requests.post(UIS_CALL_API_URL, json=payload, timeout=12)
-        return r.json()
-    except Exception as e:
-        print(f"Ошибка вызова UIS Call API ({method}): {e}", flush=True)
-        return {}
+    global _current_token_idx
+    params = dict(params or {})
+
+    for attempt in range(len(UIS_ACCESS_TOKENS)):
+        token = UIS_ACCESS_TOKENS[_current_token_idx]
+        payload = {
+            "jsonrpc": "2.0",
+            "id": int(time.time() * 1000),
+            "method": method,
+            "params": {**params, "access_token": token}
+        }
+        try:
+            r = requests.post(UIS_CALL_API_URL, json=payload, timeout=12)
+            res = r.json()
+            err = res.get("error") or {}
+            err_code = err.get("code")
+            err_msg = str(err.get("message") or "")
+
+            # Проверяем превышение лимита запросов (rate limit / quota exceeded)
+            is_limit_reached = (
+                r.status_code == 429
+                or err_code in [-32000, -32001, 429]
+                or any(w in err_msg.lower() for w in ["limit", "quota", "превышен лимит", "слишком много"])
+            )
+
+            if is_limit_reached and len(UIS_ACCESS_TOKENS) > 1:
+                next_idx = (_current_token_idx + 1) % len(UIS_ACCESS_TOKENS)
+                print(f"[UIS POOL] Токен #{_current_token_idx + 1} исчерпал лимит ({err_msg}). Автопереключение на токен #{next_idx + 1}!", flush=True)
+                _current_token_idx = next_idx
+                continue
+
+            return res
+        except Exception as e:
+            print(f"Ошибка вызова UIS Call API ({method}) на токене #{_current_token_idx + 1}: {e}", flush=True)
+            time.sleep(1)
+
+    return {}
 
 def is_working_hours():
     now = datetime.now(MSK_TZ)
