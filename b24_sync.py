@@ -639,18 +639,22 @@ def sync_candidate_to_b24_deal(chat_id: str, cand_data: dict, is_disqualified: b
         # ассистента КАТЕГОРИЧЕСКИ НЕ ДОЛЖНЫ создавать новую сделку или возвращать её в NEW!
         # =====================================================================
         if current_deal and current_deal.get('STAGE_ID') == 'LOSE':
-            print(f'[B24 SYNC] 🛑 Чат {chat_id} привязан к архивной сделке #{current_deal.get("ID")} (LOSE). Возврат в NEW СТРОГО ЗАПРЕЩЕН!', flush=True)
-            try:
-                call_b24('crm.timeline.comment.add', {
-                    'fields': {
-                        'ENTITY_ID': current_deal.get('ID'),
-                        'ENTITY_TYPE': 'deal',
-                        'COMMENT': f'ℹ️ [Архивный диалог] Зафиксирована переписка по чату {chat_id}. Сделка оставлена в архиве (LOSE) согласно регламенту.'
-                    }
-                })
-            except Exception:
-                pass
-            return DealSyncResult(current_deal.get('ID'), current_deal.get('ASSIGNED_BY_ID'), False)
+            # Если сделка была в архиве, но кандидат теперь прислал номер телефона И не дисквалифицирован:
+            if phone and not is_disqualified:
+                print(f"[B24 SYNC] Чат {chat_id} привязан к сделке #{current_deal.get('ID')} (LOSE), но кандидат прислал номер {phone}. Возвращаем в работу!", flush=True)
+            else:
+                print(f'[B24 SYNC] 🛑 Чат {chat_id} привязан к архивной сделке #{current_deal.get("ID")} (LOSE). Оставляем в архиве.', flush=True)
+                try:
+                    call_b24('crm.timeline.comment.add', {
+                        'fields': {
+                            'ENTITY_ID': current_deal.get('ID'),
+                            'ENTITY_TYPE': 'deal',
+                            'COMMENT': f'ℹ️ [Архивный диалог] Зафиксирована переписка по чату {chat_id}. Сделка оставлена в архиве (LOSE) согласно регламенту.'
+                        }
+                    })
+                except Exception:
+                    pass
+                return DealSyncResult(current_deal.get('ID'), current_deal.get('ASSIGNED_BY_ID'), False)
 
         # =====================================================================
         # СТРОЖАЙШЕЕ ПРАВИЛО: API НИКОГДА НЕ СОЗДАЕТ СДЕЛКИ!
@@ -755,12 +759,56 @@ def sync_candidate_to_b24_deal(chat_id: str, cand_data: dict, is_disqualified: b
             upd_fields['ASSIGNED_BY_ID'] = responsible_id
 
         # =====================================================================
-        # ФУНКЦИЯ ПЕРЕДВИЖЕНИЯ ПО ВОРОНКАМ И СТАДИЯМ ПОЛНОСТЬЮ НА СТОПЕ!
-        # Сделки НЕ перекидываются между воронками (Категория 0, 44 и т.д.)
-        # и НЕ меняют стадии автоматически. Робот работает строго в чатах.
+        # УМНЫЙ ФИЛЬТР (SMART GUARD):
+        # 1. Если кандидат нецелевой (возраст < 20 или > 55, нет паспорта РФ):
+        #    -> STAGE_ID = 'LOSE', причина 136 (Возраст) или 138 (Гражданство)
+        # 2. Если у кандидата нет номера телефона (пустой чат):
+        #    -> STAGE_ID = 'LOSE', причина 2686 (Перестал выходить на связь)
+        # 3. Если кандидат прислал номер телефона:
+        #    -> возвращаем из LOSE в работу (NEW)
         # =====================================================================
-        if 'STAGE_ID' in upd_fields:
-            del upd_fields['STAGE_ID']
+        deal_phone = phone
+        if not deal_phone and current_deal:
+            c_id = contact_id or current_deal.get('CONTACT_ID')
+            if c_id:
+                try:
+                    c_data = call_b24('crm.contact.get', {'id': c_id}).get('result', {})
+                    c_phones = c_data.get('PHONE', [])
+                    if c_phones and isinstance(c_phones, list) and c_phones[0].get('VALUE'):
+                        deal_phone = c_phones[0].get('VALUE')
+                except Exception:
+                    pass
+
+        is_age_disqualified = False
+        try:
+            cand_age_num = int(age) if age and str(age).isdigit() else 0
+            if cand_age_num > 0 and (cand_age_num < 20 or cand_age_num > 55):
+                is_age_disqualified = True
+        except Exception:
+            pass
+
+        if is_disqualified or is_age_disqualified:
+            upd_fields['STAGE_ID'] = 'LOSE'
+            if is_age_disqualified or 'возраст' in (disqualify_reason or '').lower():
+                upd_fields['UF_CRM_1768823747857'] = ['136']  # Возраст
+            elif 'гражданств' in (disqualify_reason or '').lower() or 'паспорт' in (disqualify_reason or '').lower():
+                upd_fields['UF_CRM_1768823747857'] = ['138']  # Гражданство
+            else:
+                upd_fields['UF_CRM_1768823747857'] = ['204']  # Нецелевой
+            print(f"[SMART GUARD] Сделка #{deal_id} переведена в LOSE: нецелевой ({disqualify_reason or 'возраст/гражданство'})", flush=True)
+
+        elif not deal_phone:
+            upd_fields['STAGE_ID'] = 'LOSE'
+            upd_fields['UF_CRM_1768823747857'] = ['2686']  # Перестал выходить на связь / Номер отсутствует
+            print(f"[SMART GUARD] Сделка #{deal_id} переведена в LOSE: отсутствует номер телефона", flush=True)
+
+        elif deal_phone and current_deal and current_deal.get('STAGE_ID') == 'LOSE':
+            old_reasons = current_deal.get('UF_CRM_1768823747857') or []
+            if '2686' in old_reasons or 2686 in old_reasons or not old_reasons:
+                upd_fields['STAGE_ID'] = 'NEW'
+                upd_fields['UF_CRM_1768823747857'] = []
+                print(f"[SMART GUARD] Сделка #{deal_id} возвращена из архива в работу (получен номер {deal_phone})!", flush=True)
+
         if 'CATEGORY_ID' in upd_fields:
             del upd_fields['CATEGORY_ID']
 
