@@ -595,7 +595,11 @@ def run_dialer_step():
             "first_call": "contact",
             "contact": phone,
             "employee": {"id": emp_id},
-            "virtual_phone_number": virt_phone
+            "virtual_phone_number": virt_phone,
+            "contact_message": {
+                "type": "tts",
+                "value": f"Здравствуйте! По поводу вашего отклика на работу на Авито. Пожалуйста, оставайтесь на линии, соединяю с менеджером."
+            }
         })
 
         res_data = uis_res.get("result", {}).get("data", {})
