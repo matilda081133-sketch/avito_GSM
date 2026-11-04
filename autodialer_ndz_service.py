@@ -387,7 +387,6 @@ def check_pending_calls(state):
         since_time = datetime.fromtimestamp(start_ts - 20, MSK_TZ).strftime("%Y-%m-%d %H:%M:%S")
         res = call_b24("voximplant.statistic.get", {
             "FILTER": {
-                "=PORTAL_NUMBER": "79677875304",
                 "=PHONE_NUMBER": phone,
                 ">CALL_START_DATE": since_time
             },
@@ -587,17 +586,16 @@ def run_dialer_step():
             print(f"⏳ [МЕНЕДЖЕР В ЗВОНКЕ] {uname} сейчас на линии. Ожидаем завершения разговора перед звонком кандидату +{phone} (Сделка #{did})...", flush=True)
             continue
 
-        AUTODIAL_VIRTUAL_NUMBER = "79677875304" # Линия сценария автопрозвона с голосовым меню IVR
+        print(f"\n🚀 [ИНИЦИАЦИЯ ВЫЗОВА В СОФТФОН UIS] {uname} (Employee ID: {emp_id}) -> Сделка #{did} | Тел кандидата: +{phone} | Линия: +{virt_phone} | Стадия: {st_label}", flush=True)
 
-        print(f"\n🚀 [ИНИЦИАЦИЯ ВЫЗОВА ПО СЦЕНАРИЮ АВТОПРОЗВОНА UIS] {uname} -> Сделка #{did} | Тел кандидата: +{phone} | Номер сценария: +{AUTODIAL_VIRTUAL_NUMBER} | Стадия: {st_label}", flush=True)
-
-        # Вызываем официальный метод UIS Call API start.vnumber_call:
-        # Звонок идет кандидату с номера 79677875304, срабатывает сценарий «автопрозвон» с голосовым меню (кнопка 1).
-        # Только при нажатии 1 вызов переводится на менеджера в обычном штатном режиме (без автоответа)!
-        uis_res = call_uis_api("start.vnumber_call", {
-            "virtual_phone_number": AUTODIAL_VIRTUAL_NUMBER,
+        # Вызываем официальный метод UIS Call API start.employee_call:
+        # Звонок идет кандидату со строго закрепленной виртуальной линии рекрутера,
+        # и при ответе моментально коммутируется прямо в софтфон ответственного менеджера!
+        uis_res = call_uis_api("start.employee_call", {
             "first_call": "contact",
-            "contact": phone
+            "contact": phone,
+            "employee": {"id": emp_id},
+            "virtual_phone_number": virt_phone
         })
 
         res_data = uis_res.get("result", {}).get("data", {})
@@ -626,7 +624,7 @@ def run_dialer_step():
             }
             save_state(state)
             if not is_manager_busy:
-                add_timeline_comment(did, f"📞 Автопрозвон НДЗ: Инициирован вызов кандидату +{phone} через сценарий UIS (IVR Меню с кнопкой 1).\nОтветственный менеджер: {uname}.\nСтадия: {st_label}.\nСессия UIS: {session_id}")
+                add_timeline_comment(did, f"📞 Автопрозвон НДЗ: Инициирован вызов кандидату +{phone} через UIS (прямое соединение с ответственным менеджером {uname}).\nЛиния: +{virt_phone}.\nСтадия: {st_label}.\nСессия UIS: {session_id}")
         else:
             print(f"❌ [ОШИБКА UIS] Не удалось запустить звонок для {uname} на +{phone}: {err}", flush=True)
 
