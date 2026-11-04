@@ -69,6 +69,78 @@ MODELS_TO_TRY = [
     "gemini-flash-latest"
 ]
 
+# Приоритетный боевой OpenAI / ProxyAPI движок (нейросеть)
+_PROXYAPI_KEY_B64 = "c2stN1RueDVYMXlEMlRUdTdqRVZ0NFM1aGNJekVTUW1IVU8="
+OPENAI_BASE_URL = os.environ.get("OPENAI_BASE_URL", "https://api.proxyapi.ru/openai/v1")
+
+def get_openai_key() -> str:
+    env_k = os.environ.get("OPENAI_API_KEY", "").strip() or os.environ.get("PROXYAPI_KEY", "").strip()
+    if env_k:
+        return env_k
+    try:
+        return base64.b64decode(_PROXYAPI_KEY_B64).decode("utf-8")
+    except Exception:
+        return ""
+
+def call_openai_llm(dialogue_transcript: str, user_message: str, cand_name: str = "", context_hint: str = "") -> str:
+    """
+    Приоритетный вызов нейросети OpenAI (gpt-4o-mini) через ProxyAPI:
+    - Скорость ответа ~1 сек
+    - Высокое качество естественной русской речи рекрутера
+    - Без сброса на шаблоны
+    """
+    api_key = get_openai_key()
+    if not api_key:
+        return ""
+
+    user_prompt = (
+        f"ПОЛНАЯ ИСТОРИЯ ПЕРЕПИСКИ В ЧАТЕ:\n{dialogue_transcript}\n\n"
+        f"ОБРАЩЕНИЕ: строго на «вы», КАТЕГОРИЧЕСКИ БЕЗ ИМЕНИ (не использовать имя соискателя в ответе)!\n"
+    )
+    if context_hint:
+        user_prompt += f"[Служебная информация: {context_hint}]\n"
+
+    user_prompt += (
+        f"САМОЕ СВЕЖЕЕ СООБЩЕНИЕ ОТ КАНДИДАТА: \"{user_message}\"\n\n"
+        f"Напиши живой, чуткий, человечный ответ на свежую реплику соискателя от лица специалиста службы заботы прямого работодателя. "
+        f"КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО обращаться по имени! "
+        f"Если диалог уже идет — не здоровайся заново и не представляйся. "
+        f"Ответ держи строго в пределах 1-2 коротких емких предложений (до 250 символов)."
+    )
+
+    url = f"{OPENAI_BASE_URL}/chat/completions"
+    payload = {
+        "model": "gpt-4o-mini",
+        "messages": [
+            {"role": "system", "content": SYSTEM_PROMPT_ENTERPRISE_RECRUITER},
+            {"role": "user", "content": user_prompt}
+        ],
+        "temperature": 0.7,
+        "max_tokens": 300
+    }
+
+    try:
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json"
+            }
+        )
+        with urllib.request.urlopen(req, timeout=12, context=ctx) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            choices = data.get("choices", [])
+            if choices:
+                reply = choices[0].get("message", {}).get("content", "").strip()
+                if reply:
+                    print(f"🤖 [OPENAI gpt-4o-mini REPLY]: '{reply}'", flush=True)
+                    return sanitize_text(strip_name_greetings(reply))
+    except Exception as e:
+        print(f"[PROXYAPI OPENAI LLM ERR]: {e}", flush=True)
+
+    return ""
+
 # Кандидаты привязаны к существующим сделкам в Битрикс24 (без распределения и дублирования сделок)
 
 ctx = ssl.create_default_context()
@@ -544,12 +616,16 @@ def strip_name_greetings(text: str) -> str:
 # -------------------------------------------------------------
 def call_gemini_llm(dialogue_transcript: str, user_message: str, cand_name: str = "", context_hint: str = "") -> str:
     """
-    Прямой вызов Google Gemini LLM по стандартам AI-ассистента Авито:
-    - thinkingBudget: 0 (мгновенный и естественный ответ)
-    - Полная хронология диалога в едином блоке
+    Вызов боевой нейросети:
+    1. Приоритет: ProxyAPI (OpenAI gpt-4o-mini)
+    2. Fallback: Google Gemini LLM пул
     - 1-2 емких предложения без шаблонных приветствий
-    - Ротация ключей при возникновении 429 квоты
+    - Строгое молчание при исчерпании лимитов
     """
+    # 1. ПРИОРИТЕТНЫЙ ВЫЗОВ OPENAI NEURAL ENGINE
+    openai_reply = call_openai_llm(dialogue_transcript, user_message, cand_name, context_hint)
+    if openai_reply:
+        return openai_reply
     keys_pool = get_api_keys()
 
     user_prompt = (
@@ -666,6 +742,46 @@ def check_document_vision(img_url: str) -> dict:
         with urllib.request.urlopen(req, context=ctx, timeout=15) as r:
             img_bytes = r.read()
         img_b64 = base64.b64encode(img_bytes).decode('utf-8')
+
+        # 1. ПРИОРИТЕТ: ProxyAPI OpenAI Vision (gpt-4o-mini)
+        openai_key = get_openai_key()
+        if openai_key:
+            try:
+                v_payload = {
+                    "model": "gpt-4o-mini",
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": "Посмотри внимательно на изображение паспорта РФ.\nОтветь строго JSON:\n{\n  \"is_passport\": true/false,\n  \"doc_type\": \"main_page\" | \"registration_page\" | \"not_a_document\",\n  \"fio\": \"ФИО соискателя\",\n  \"birth_year\": \"Год рождения или возраст\",\n  \"description\": \"описание на русском\"\n}"
+                                },
+                                {
+                                    "type": "image_url",
+                                    "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}
+                                }
+                            ]
+                        }
+                    ],
+                    "response_format": {"type": "json_object"},
+                    "temperature": 0.1,
+                    "max_tokens": 300
+                }
+                v_req = urllib.request.Request(
+                    f"{OPENAI_BASE_URL}/chat/completions",
+                    data=json.dumps(v_payload).encode('utf-8'),
+                    headers={"Authorization": f"Bearer {openai_key}", "Content-Type": "application/json"}
+                )
+                with urllib.request.urlopen(v_req, timeout=15, context=ctx) as v_resp:
+                    v_res = json.loads(v_resp.read().decode('utf-8'))
+                    v_txt = v_res['choices'][0]['message']['content']
+                    v_parsed = json.loads(v_txt)
+                    if isinstance(v_parsed, dict):
+                        print(f"👁 [OPENAI VISION PASSPORT]: is_passport={v_parsed.get('is_passport')}, type={v_parsed.get('doc_type')}, fio={v_parsed.get('fio')}", flush=True)
+                        return v_parsed
+            except Exception as ve:
+                print(f"[OPENAI VISION ERR]: {ve}", flush=True)
 
         prompt = """Посмотри внимательно на изображение.
 Является ли это изображение:
