@@ -1662,6 +1662,7 @@ def process_valeria_chat(chat_id: str, cand_name: str, item_title: str, msgs: li
         "ready_date_iso": ready_date_iso,
         "vacancy": item_title or fac_info["title"],
         "vacancy_url": item_url or (f"https://www.avito.ru/{item_id}" if item_id else ""),
+        "vacancy_code": vacancy_code or item_id or "",
         "facility": facility_name,
         "project_enum": fac_info.get("project_enum", "62"),
         "cabinet_name": cabinet_name,

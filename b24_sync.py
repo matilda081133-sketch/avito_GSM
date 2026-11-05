@@ -564,6 +564,93 @@ class DealSyncResult(int):
         yield self.deal_id
         yield self.responsible_id
 
+def should_revive_lose_deal(current_deal: dict, cand_data: dict) -> tuple:
+    """
+    Проверяет, разрешено ли автоматическое оживление сделки из стадии Неуспех (LOSE).
+    РАЗРЕШЕННЫЕ ИСКЛЮЧЕНИЯ ПО РЕГЛАМЕНТУ:
+    1. Причина «Не вышел на связь» (2686 / 2850 / 2858) — кандидат снова откликнулся/написал в чат.
+    2. Причина «Нет заявки / нет потребности (резерв)» (154 / 2884) — кандидат из кадрового резерва.
+    3. Причина «Не подошли условия» (152 / 2882 / 2880) — СТРОГО ЕСЛИ кандидат откликнулся на ДРУГУЮ вакансию
+       (сравниваем код вакансии, ID объявления на Авито, название и целевой объект).
+    
+    ДЛЯ ВСЕХ ОСТАЛЬНЫХ ПРИЧИН (Возраст, Гражданство, СБ, Нецелевой, Отказ от вахты и др.):
+    Автоматическое оживление СТРОЖАЙШЕ ЗАПРЕЩЕНО!
+    """
+    if not current_deal or current_deal.get('STAGE_ID') != 'LOSE':
+        return False, "Сделка не в стадии LOSE"
+
+    primary_raw = current_deal.get('UF_CRM_1768823747857')
+    fail_list = []
+    if isinstance(primary_raw, list):
+        fail_list = [str(x) for x in primary_raw]
+    elif primary_raw:
+        fail_list = [str(primary_raw)]
+
+    det_raw = str(current_deal.get('UF_CRM_1773129274833') or '')
+
+    # 1. Причина «Не вышел на связь» (2686, 2850, 2858)
+    is_no_contact = (
+        '2686' in fail_list or
+        det_raw in ['2850', '2858']
+    )
+    if is_no_contact:
+        return True, "Кандидат вышел на связь (ранее: Не вышел на связь / НДЗ)"
+
+    # 2. Причина «Нет заявки / резерв» (154, 2884)
+    is_no_quota = (
+        '154' in fail_list or
+        det_raw == '2884'
+    )
+    if is_no_quota:
+        return True, "Кандидат из кадрового резерва (ранее: Нет заявки / нет потребности)"
+
+    # 3. Причина «Не подошли условия» (152, 2882, 2880) — СТРОГО ЕСЛИ ДРУГАЯ ВАКАНСИЯ
+    is_bad_conditions = (
+        '152' in fail_list or
+        det_raw in ['2882', '2880']
+    )
+    if is_bad_conditions:
+        new_vac = (cand_data.get('vacancy') or '').strip().lower()
+        new_url = (cand_data.get('vacancy_url') or '').strip().lower()
+        new_code = (cand_data.get('vacancy_code') or '').strip().lower()
+        new_fac = (cand_data.get('facility') or '').strip().lower()
+
+        old_vac = (current_deal.get('UF_CRM_1768817930019') or '').strip().lower()
+        old_url = (current_deal.get('UF_CRM_1768819383825') or '').strip().lower()
+        old_fac = (current_deal.get('UF_CRM_1775470003043') or '').strip().lower()
+
+        m_old_code = re.search(r'\[B\]Код вакансии:\[/B\]\s*([^\n\r\[]+)', current_deal.get('COMMENTS') or '')
+        old_code = m_old_code.group(1).strip().lower() if m_old_code else ''
+
+        m_new_item = re.search(r'\b(\d{9,12})\b', new_url)
+        m_old_item = re.search(r'\b(\d{9,12})\b', old_url)
+        new_item_id = m_new_item.group(1) if m_new_item else ''
+        old_item_id = m_old_item.group(1) if m_old_item else ''
+
+        is_different = False
+        diff_detail = ""
+
+        if new_code and old_code and new_code != old_code:
+            is_different = True
+            diff_detail = f"код {new_code} вместо {old_code}"
+        elif new_item_id and old_item_id and new_item_id != old_item_id:
+            is_different = True
+            diff_detail = f"объявление #{new_item_id} вместо #{old_item_id}"
+        elif new_fac and old_fac and new_fac != old_fac:
+            is_different = True
+            diff_detail = f"объект {cand_data.get('facility')} вместо {current_deal.get('UF_CRM_1775470003043')}"
+        elif new_vac and old_vac and (new_vac not in old_vac and old_vac not in new_vac):
+            is_different = True
+            diff_detail = f"вакансия «{cand_data.get('vacancy')}» вместо «{current_deal.get('UF_CRM_1768817930019')}»"
+
+        if is_different:
+            return True, f"Кандидат откликнулся на ДРУГУЮ вакансию ({diff_detail}). Ранее: Не подошли условия"
+        else:
+            return False, "Та же самая вакансия / объект, по которой не подошли условия. Оставляем в архиве (LOSE)"
+
+    # Все остальные причины (Возраст 3134, Гражданство/СБ 3136, Нецелевой 204, Отказ от вахты и др.)
+    return False, f"Запрет автоматического оживления для причины отказа {fail_list or det_raw or 'Неуспех'}"
+
 def sync_candidate_to_b24_deal(chat_id: str, cand_data: dict, is_disqualified: bool = False, disqualify_reason: str = "") -> DealSyncResult:
     """
     Синхронизирует все полученные из чата данные в соответствующие поля сделки в Битрикс24:
@@ -590,7 +677,9 @@ def sync_candidate_to_b24_deal(chat_id: str, cand_data: dict, is_disqualified: b
             'filter': {'%UF_CRM_1770280572875': chat_id},
             'select': ['ID', 'TITLE', 'CONTACT_ID', 'STAGE_ID', 'ASSIGNED_BY_ID', 'CATEGORY_ID', 'SOURCE_ID',
                        'UF_CRM_1775470003043', 'UF_CRM_1768815865773', 'UF_CRM_1768816011673', 
-                       'UF_CRM_1768816356722', 'UF_CRM_1768816331873', 'UF_CRM_1768816641561', 'UF_CRM_1768816560167', 'UF_CRM_1780991278280', 'UF_CRM_1768816817128']
+                       'UF_CRM_1768816356722', 'UF_CRM_1768816331873', 'UF_CRM_1768816641561', 'UF_CRM_1768816560167',
+                       'UF_CRM_1780991278280', 'UF_CRM_1768816817128', 'UF_CRM_1768823747857', 'UF_CRM_1773129274833',
+                       'UF_CRM_1768817930019', 'UF_CRM_1768819383825', 'COMMENTS']
         })
         deals = res.get('result', [])
         if not deals:
@@ -638,21 +727,27 @@ def sync_candidate_to_b24_deal(chat_id: str, cand_data: dict, is_disqualified: b
         # Если сделка уже закрыта в LOSE или кандидат из архива, исходящие сообщения
         # ассистента КАТЕГОРИЧЕСКИ НЕ ДОЛЖНЫ создавать новую сделку или возвращать её в NEW!
         # =====================================================================
+        is_revived_deal = False
+        revive_note = ""
         if current_deal and current_deal.get('STAGE_ID') == 'LOSE':
-            # ЖЕЛЕЗНЫЙ ЗАПРЕТ: Сделка УЖЕ закрыта в Неуспех (LOSE)!
-            # Робот КАТЕГОРИЧЕСКИ НЕ ИМЕЕТ ПРАВА оживлять закрытые сделки!
-            print(f'[B24 SYNC] 🛑 Чат {chat_id} привязан к архивной сделке #{current_deal.get("ID")} (LOSE). Оставляем в архиве.', flush=True)
-            try:
-                call_b24('crm.timeline.comment.add', {
-                    'fields': {
-                        'ENTITY_ID': current_deal.get('ID'),
-                        'ENTITY_TYPE': 'deal',
-                        'COMMENT': f'ℹ️ [Архивный диалог] Зафиксирована активность кандидата в чате {chat_id} (тел: {phone or "не указан"}). Сделка оставлена в Неуспехе (LOSE) согласно решению рекрутера.'
-                    }
-                })
-            except Exception:
-                pass
-            return DealSyncResult(current_deal.get('ID'), current_deal.get('ASSIGNED_BY_ID'), False)
+            can_revive, revive_note = should_revive_lose_deal(current_deal, cand_data)
+            if not can_revive:
+                # ЖЕЛЕЗНЫЙ ЗАПРЕТ: Сделка закрыта в LOSE и не подпадает под разрешенные исключения
+                print(f'[B24 SYNC] 🛑 Чат {chat_id} привязан к архивной сделке #{current_deal.get("ID")} (LOSE). Оставляем в архиве: {revive_note}', flush=True)
+                try:
+                    call_b24('crm.timeline.comment.add', {
+                        'fields': {
+                            'ENTITY_ID': current_deal.get('ID'),
+                            'ENTITY_TYPE': 'deal',
+                            'COMMENT': f'ℹ️ [Архивный диалог] Зафиксирована активность кандидата в чате {chat_id} (тел: {phone or "не указан"}). Сделка оставлена в Неуспехе (LOSE): {revive_note}.'
+                        }
+                    })
+                except Exception:
+                    pass
+                return DealSyncResult(current_deal.get('ID'), current_deal.get('ASSIGNED_BY_ID'), False)
+            else:
+                print(f'[B24 SYNC] 🔄 [ИЗ НЕУСПЕХА В РАБОТУ] Сделка #{current_deal.get("ID")}: {revive_note}!', flush=True)
+                is_revived_deal = True
 
         # =====================================================================
         # СТРОЖАЙШЕЕ ПРАВИЛО: API НИКОГДА НЕ СОЗДАЕТ СДЕЛКИ!
@@ -819,6 +914,22 @@ def sync_candidate_to_b24_deal(chat_id: str, cand_data: dict, is_disqualified: b
         except Exception as e_age:
             print(f"Age qualification err: {e_age}")
 
+        if is_revived_deal:
+            # Сделка возвращается из Неуспеха в активную воронку на стадию «Новый отклик»
+            upd_fields['STAGE_ID'] = 'NEW'
+            upd_fields['UF_CRM_1768823747857'] = []  # Очищаем причину отказа
+            upd_fields['UF_CRM_1773129274833'] = ''  # Очищаем детальную причину
+            try:
+                call_b24('crm.timeline.comment.add', {
+                    'fields': {
+                        'ENTITY_ID': deal_id,
+                        'ENTITY_TYPE': 'deal',
+                        'COMMENT': f'🔄 [ОЖИВЛЕНИЕ СДЕЛКИ] {revive_note}. Сделка возвращена в работу («Новый отклик»).'
+                    }
+                })
+            except Exception:
+                pass
+
         if is_disqualified or is_age_disqualified:
             upd_fields['STAGE_ID'] = 'LOSE'
             if is_age_disqualified or 'возраст' in (disqualify_reason or '').lower():
@@ -846,14 +957,16 @@ def sync_candidate_to_b24_deal(chat_id: str, cand_data: dict, is_disqualified: b
                 pass
 
         elif not deal_phone:
-            upd_fields['STAGE_ID'] = 'LOSE'
-            upd_fields['UF_CRM_1768823747857'] = ['3132']  # Номер отсутствует
-            upd_fields['UF_CRM_1773129274833'] = '2850'    # НДЗ/ неверный номер/ номер отсутствует
-            print(f"[SMART GUARD] Сделка #{deal_id} переведена в LOSE: отсутствует номер телефона (причина 3132: Номер отсутствует)", flush=True)
+            if not is_revived_deal:
+                upd_fields['STAGE_ID'] = 'LOSE'
+                upd_fields['UF_CRM_1768823747857'] = ['3132']  # Номер отсутствует
+                upd_fields['UF_CRM_1773129274833'] = '2850'    # НДЗ/ неверный номер/ номер отсутствует
+                print(f"[SMART GUARD] Сделка #{deal_id} переведена в LOSE: отсутствует номер телефона (причина 3132: Номер отсутствует)", flush=True)
 
         elif deal_phone and current_deal and current_deal.get('STAGE_ID') == 'LOSE':
-            # ЖЕЛЕЗНЫЙ ЗАПРЕТ: Сделки из LOSE никогда не возвращаются в NEW автоматически!
-            pass
+            # ЖЕЛЕЗНЫЙ ЗАПРЕТ: Сделки из LOSE никогда не возвращаются в NEW автоматически (кроме разрешенных исключений выше)!
+            if not is_revived_deal:
+                pass
 
         if upd_fields:
             call_b24('crm.deal.update', {'id': deal_id, 'fields': upd_fields})
