@@ -304,7 +304,7 @@ def normalize_phone_for_uis(phone_raw):
         ph = '7' + ph
     return ph
 
-ALL_NDZ_STAGES = ["UC_NDZ2", "EXECUTING", "UC_NDZ3"]
+ALL_NDZ_STAGES = ["UC_NDZ2", "EXECUTING", "UC_NDZ3", "UC_REQ_PASSPORT"]
 _recruiter_stage_indices = {}
 
 def get_next_ndz_deal_for_recruiter(user_id, called_today):
@@ -321,6 +321,11 @@ def get_next_ndz_deal_for_recruiter(user_id, called_today):
             "ASSIGNED_BY_ID": user_id,
             "STAGE_ID": st
         }
+        # Для стадии «Запрос паспорта» прозваниваем СТРОГО сделки старше 5 дней (> 5 дней)
+        # Свежие сделки рекрутеры ведут вручную!
+        if st == "UC_REQ_PASSPORT":
+            five_days_ago_str = (datetime.now(MSK_TZ) - timedelta(days=5)).strftime("%Y-%m-%d %H:%M:%S")
+            filt["<=DATE_CREATE"] = five_days_ago_str
         res = call_b24("crm.deal.list", {
             "order": {"ID": "DESC"},
             "filter": filt,
@@ -330,6 +335,15 @@ def get_next_ndz_deal_for_recruiter(user_id, called_today):
         deals = res.get("result", [])
         for d in deals:
             did = str(d.get("ID"))
+            # Двойная проверка в Python: для «Запрос паспорта» строго старше 5 дней (5 * 86400 сек)
+            if st == "UC_REQ_PASSPORT":
+                dc = d.get("DATE_CREATE") or ""
+                try:
+                    dc_dt = datetime.fromisoformat(dc[:19]).replace(tzinfo=MSK_TZ)
+                    if (datetime.now(MSK_TZ) - dc_dt).total_seconds() < 5 * 86400:
+                        continue
+                except Exception:
+                    pass
             # Антиспам-пауза 2.5 часа (9000 сек)
             last_info = called_today.get(did)
             if last_info:
@@ -542,6 +556,88 @@ def get_busy_uis_employees():
                         busy_virt_phones.add(ph_val)
     return busy_emp_ids, busy_virt_phones
 
+
+def check_incoming_callbacks(state):
+    """
+    Отслеживает пропущенные входящие обратные звонки кандидатов на номер автопрозвона (79677875304).
+    Если кандидат перезвонил, но звонок сорвался/был не принят (код 304):
+    Мгновенно шлет персональное уведомление (колокольчик) в Битрикс24 ответственному менеджеру!
+    """
+    processed = state.setdefault("notified_callbacks", [])
+    now_dt = datetime.now(MSK_TZ)
+    since_time = (now_dt - timedelta(minutes=15)).strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        res = call_b24("voximplant.statistic.get", {
+            "FILTER": {
+                "=PORTAL_NUMBER": "79677875304",
+                "=CALL_TYPE": "2",
+                "=CALL_FAILED_CODE": "304",
+                ">CALL_START_DATE": since_time
+            },
+            "SORT": "CALL_START_DATE",
+            "ORDER": "DESC",
+            "LIMIT": 20
+        }).get("result", [])
+
+        for c in res:
+            cid = str(c.get("ID"))
+            if cid in processed:
+                continue
+            processed.append(cid)
+            if len(processed) > 500:
+                state["notified_callbacks"] = processed[-300:]
+
+            phone = c.get("PHONE_NUMBER") or ""
+            user_id = c.get("PORTAL_USER_ID")
+            ent_id = c.get("CRM_ENTITY_ID")
+            ent_type = c.get("CRM_ENTITY_TYPE")
+
+            deal_id = None
+            deal_title = f"Кандидат +{phone}"
+            if ent_type == "CONTACT" and ent_id:
+                d_res = call_b24("crm.deal.list", {
+                    "filter": {"CONTACT_ID": ent_id, "CATEGORY_ID": 0},
+                    "order": {"ID": "DESC"},
+                    "select": ["ID", "TITLE", "ASSIGNED_BY_ID"],
+                    "limit": 1
+                }).get("result", [])
+                if d_res:
+                    deal_id = d_res[0].get("ID")
+                    deal_title = d_res[0].get("TITLE")
+                    if not user_id or user_id == "0":
+                        user_id = d_res[0].get("ASSIGNED_BY_ID")
+
+            if not user_id or str(user_id) == "0":
+                continue
+
+            target_uid = int(user_id)
+            if deal_id:
+                deal_url = f"https://b24-4qx38o.bitrix24.ru/crm/deal/details/{deal_id}/"
+                msg = (
+                    f"🔥 [B]ВАМ ТОЛЬКО ЧТО ПЕРЕЗВОНИЛ КАНДИДАТ![/B]\n"
+                    f"Сделка #{deal_id}: {deal_title}\n"
+                    f"Телефон: +{phone}\n"
+                    f"Кандидат перезвонил на номер автопрозвона, но вызов был не отвечен.\n"
+                    f"👉 [URL={deal_url}]Срочно открыть сделку #{deal_id} и перезвонить[/URL]"
+                )
+                add_timeline_comment(deal_id, f"🔥 [B]Автопрозвон:[/B] Кандидат +{phone} только что перезвонил в ответ на автопрозвон, но звонок не был принят. Ответственному менеджеру отправлен колокольчик срочно перезвонить.")
+            else:
+                msg = (
+                    f"🔥 [B]ВАМ ТОЛЬКО ЧТО ПЕРЕЗВОНИЛ КАНДИДАТ![/B]\n"
+                    f"Телефон: +{phone}\n"
+                    f"Кандидат перезвонил на номер автопрозвона, но вызов был не отвечен.\n"
+                    f"👉 Срочно наберите кандидата: +{phone}"
+                )
+
+            requests.post(f"{B24_NOTIFY_WEBHOOK_URL}im.notify.system.add", json={
+                "USER_ID": target_uid,
+                "MESSAGE": msg
+            }, timeout=8)
+            print(f"🔥 [КОЛОКОЛЬЧИК ОБРАТНЫЙ ЗВОНОК] Отправлен менеджеру {target_uid} по кандидату +{phone} (Сделка #{deal_id})", flush=True)
+        save_state(state)
+    except Exception as e:
+        print(f"Ошибка проверки обратных звонков: {e}", flush=True)
+
 def run_dialer_step():
     now_dt = datetime.now(MSK_TZ)
     today_str = now_dt.strftime("%Y-%m-%d")
@@ -555,6 +651,9 @@ def run_dialer_step():
 
     # Проверка результатов звонков и каскада стадий
     check_pending_calls(state)
+
+    # Проверка входящих обратных звонков кандидатов на номер автопрозвона
+    check_incoming_callbacks(state)
 
     # Проверка закрытия НДЗ 3 в 18:00
     close_eod_ndz3_deals()
