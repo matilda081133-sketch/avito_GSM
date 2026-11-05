@@ -321,11 +321,6 @@ def get_next_ndz_deal_for_recruiter(user_id, called_today):
             "ASSIGNED_BY_ID": user_id,
             "STAGE_ID": st
         }
-        # Для стадии «Запрос паспорта» прозваниваем ТОЛЬКО сделки старше одной недели (> 7 дней)
-        if st == "UC_REQ_PASSPORT":
-            week_ago_str = (datetime.now(MSK_TZ) - timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
-            filt["<=DATE_CREATE"] = week_ago_str
-
         res = call_b24("crm.deal.list", {
             "order": {"ID": "DESC"},
             "filter": filt,
@@ -335,15 +330,6 @@ def get_next_ndz_deal_for_recruiter(user_id, called_today):
         deals = res.get("result", [])
         for d in deals:
             did = str(d.get("ID"))
-            # Двойная проверка в Python: для «Запрос паспорта» строго старше 7 дней
-            if st == "UC_REQ_PASSPORT":
-                dc = d.get("DATE_CREATE") or ""
-                try:
-                    dc_dt = datetime.fromisoformat(dc[:19])
-                    if (datetime.now() - dc_dt).total_seconds() < 7 * 86400:
-                        continue
-                except Exception:
-                    pass
             # Антиспам-пауза 2.5 часа (9000 сек)
             last_info = called_today.get(did)
             if last_info:
@@ -613,9 +599,9 @@ def run_dialer_step():
 
         is_manager_busy = (emp_id in busy_emp_ids) or (virt_phone in busy_virt_phones)
 
-        # Для стадий НДЗ ждем освобождения менеджера, а для «Запрос паспорта» разрешаем прозвон для выявления кандидата в сети
-        if is_manager_busy and stage != "UC_REQ_PASSPORT":
-            print(f"⏳ [МЕНЕДЖЕР В ЗВОНКЕ] {uname} сейчас на линии. Ожидаем завершения разговора перед звонком кандидату +{phone} (Сделка #{did})...", flush=True)
+        # Ждем освобождения менеджера перед звонком кандидату (включая Запрос паспорта, чтобы при нажатии 1 не было сброса)
+        if is_manager_busy:
+            print(f"⏳ [МЕНЕДЖЕР В ЗВОНКЕ] {uname} сейчас на линии. Ожидаем завершения разговора перед звонком кандидату +{phone} (Сделка #{did} [{st_label}])...", flush=True)
             continue
 
         print(f"\n🚀 [ИНИЦИАЦИЯ ВЫЗОВА В СОФТФОН UIS] {uname} (Employee ID: {emp_id}) -> Сделка #{did} | Тел кандидата: +{phone} | Линия: +{virt_phone} | Стадия: {st_label}", flush=True)
