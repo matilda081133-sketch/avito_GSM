@@ -304,7 +304,7 @@ def normalize_phone_for_uis(phone_raw):
         ph = '7' + ph
     return ph
 
-ALL_NDZ_STAGES = ["UC_NDZ2", "EXECUTING", "UC_NDZ3", "UC_REQ_PASSPORT"]
+ALL_NDZ_STAGES = ["UC_NDZ2", "EXECUTING", "UC_NDZ3"]
 _recruiter_stage_indices = {}
 
 def get_next_ndz_deal_for_recruiter(user_id, called_today):
