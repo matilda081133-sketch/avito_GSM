@@ -783,20 +783,43 @@ def sync_candidate_to_b24_deal(chat_id: str, cand_data: dict, is_disqualified: b
         try:
             cand_age_num = int(age) if age and str(age).isdigit() else 0
             if cand_age_num > 0:
-                # Проверка специфики объекта (на Альфатехформ строго до 45 лет!)
                 comb_check = f"{upd_fields.get('UF_CRM_1775470003043', '')} {upd_fields.get('UF_CRM_1768815865773', '')} {upd_fields.get('TITLE', '')} {comments}".lower()
+                is_smart = any(w in comb_check for w in ["смарт", "smart", "петшоп", "petshop", "балаших"])
+                is_abi = any(w in comb_check for w in ["аби", "abi", "владимир", "мясокомбинат"])
                 is_alfa = any(w in comb_check for w in ["альфатехформ", "альфатех", "3124", "климовск", "rbg_alf"])
                 
-                if is_alfa:
-                    if cand_age_num < 19 or cand_age_num > 45:
+                # Пол кандидата
+                cand_gender = cand_data.get('gender') or ''
+                if not cand_gender:
+                    first_n = (name or '').split()[0].lower() if name else ''
+                    if first_n.endswith(('а', 'я', 'ия')) and not first_n.endswith(('илья', 'никита', 'данила', 'лука', 'фома')):
+                        cand_gender = "Жен"
+                    elif first_n:
+                        cand_gender = "Муж"
+
+                # 1. Старше 55 или младше 20 — ВСЕ В НЕЦЕЛЕВЫЕ
+                if cand_age_num > 55 or (0 < cand_age_num < 20):
+                    is_age_disqualified = True
+                    disqualify_reason = f"Возраст {cand_age_num} лет (допустимо строго 20-55 лет)"
+
+                # 2. Женщины старше 45 — ТОЛЬКО НА СМАРТ
+                elif cand_gender == "Жен" and cand_age_num > 45:
+                    if not is_smart:
                         is_age_disqualified = True
-                        disqualify_reason = f"Возраст {cand_age_num} лет (на Альфатехформ строго до 45 лет)"
-                else:
-                    if cand_age_num < 20 or cand_age_num > 55:
+                        disqualify_reason = f"Женщина {cand_age_num} лет на не-Смарт объект (старше 45 строго только на Смарт)"
+
+                # 3. Мужчины старше 45 (до 55) — ТОЛЬКО НА АБИ
+                elif cand_gender == "Муж" and 45 < cand_age_num <= 55:
+                    if not is_abi:
                         is_age_disqualified = True
-                        disqualify_reason = f"Возраст {cand_age_num} лет (допустимо 20-55 лет)"
-        except Exception:
-            pass
+                        disqualify_reason = f"Мужчина {cand_age_num} лет на не-АБИ объект (старше 45 строго только на АБИ)"
+
+                # 4. Альфатехформ — строго до 45 лет
+                elif is_alfa and cand_age_num > 45:
+                    is_age_disqualified = True
+                    disqualify_reason = f"Возраст {cand_age_num} лет (на Альфатехформ строго до 45 лет)"
+        except Exception as e_age:
+            print(f"Age qualification err: {e_age}")
 
         if is_disqualified or is_age_disqualified:
             upd_fields['CATEGORY_ID'] = 44
