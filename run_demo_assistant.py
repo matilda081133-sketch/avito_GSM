@@ -1094,6 +1094,51 @@ def strip_name_greetings(text: str, has_previous_dialogue: bool = False) -> str:
         text = text[0].upper() + text[1:]
     return text
 
+
+def check_vahta_refusal(cand_text: str, combined_cand: str, ad_title: str, fac_key: str) -> tuple:
+    """
+    Проверяет, отказывается ли соискатель от вахты или требует только местную работу
+    в своем региональном городе (например, в Армавире, Краснодаре, Уфе и др.).
+    """
+    t_curr = cand_text.lower().strip()
+    t_comb = combined_cand.lower().strip()
+
+    # 1. Если вакансия чисто местная (например, Смарт в Балашихе для местных или Стандарт в СПб)
+    is_purely_local = (
+        fac_key == "SMART_LOCAL" or
+        ("стандарт" in ad_title.lower() and "спб" in ad_title.lower() and "вахт" not in ad_title.lower())
+    )
+
+    # Регулярные выражения явного отказа от вахты / поиска только местной работы
+    refusal_patterns = [
+        r'только\s+(?:в\s+[а-яё\-]+|у\s+себя|по\s+месту|по\s+городу|местн\w+)',
+        r'(?:без|не\s+готов\w*|не\s+хоч\w*)\s+(?:выезд\w*|переезд\w*)',
+        r'(?:на\s+)?вахт\w*\s+(?:не\s+(?:поед\w*|хоч\w*|интерес\w*|рассматр\w*|подход\w*)|мимо|отпадает)',
+        r'не\s+(?:поед\w*|хоч\w*|рассматр\w*|интересует)\s+(?:на\s+)?вахт\w*',
+        r'(?:ищу|нужн\w+|рассматрива\w*)\s+(?:только\s+)?(?:местн\w+|у\s+себя|в\s+своем\s+город\w+)',
+        r'только\s+местн\w+',
+        r'местн\w+\s+(?:ваканси\w+|работ\w+)',
+        r'работ\w*\s+в\s+[а-яё\-]+(?:\s+уже)?\s+готов\w*\s+работать'
+    ]
+    import re
+    combined_pat = re.compile(r'(?:' + '|'.join(refusal_patterns) + r')', re.IGNORECASE)
+
+    m_curr = combined_pat.search(t_curr)
+    m_comb = combined_pat.search(t_comb)
+
+    if m_curr or m_comb:
+        matched_text = (m_curr.group(0) if m_curr else m_comb.group(0)).lower()
+        # Исключения для местных вакансий
+        if "балаших" in matched_text and ("смарт" in fac_key.lower() or "балаших" in ad_title.lower()):
+            return False, ""
+        if ("питер" in matched_text or "спб" in matched_text) and ("стандарт" in fac_key.lower() or "спб" in ad_title.lower()):
+            return False, ""
+
+        # Если вакансия вахтовая, а соискатель требует работу только по месту / отказывается от вахты
+        return True, f"Отказ от вахты / только местные вакансии ({matched_text})"
+
+    return False, ""
+
 def generate_human_reply(cand_text: str, ad_title: str, cand_history_only: str = "", our_history: str = "", deal_id: str = "", deal_stage: str = "", cand_name: str = "", dialogue_transcript: str = "", profile: dict = None, vacancy_code: str = "", ad_description: str = "") -> tuple:
     """
     Интеллектуальный генератор диалога: гибкий, эмпатичный, контекстно-зависимый.
@@ -1240,6 +1285,17 @@ def generate_human_reply(cand_text: str, ad_title: str, cand_history_only: str =
                 f"Не подходит по возрасту: {cand_age} лет (Альфатехформ строго 20-45 лет)"
             )
 
+    # 5. ОТКАЗ ОТ ВАХТЫ / ТОЛЬКО МЕСТНЫЕ ВАКАНСИИ В РЕГИОНЕ
+    is_refused_vahta, vahta_refusal_reason = check_vahta_refusal(cand_text, combined_cand, ad_title, fac_key)
+    if is_refused_vahta:
+        return (
+            "Здравствуйте! Благодарим вас за интерес к нашей компании.\n\n"
+            "К сожалению, в вашем городе у нас открыты только вакансии с вахтовым методом (с бесплатным комфортным проживанием и питанием на объектах в Московской области и Владимире). Вакансий с местным графиком без выезда на данный момент нет.\n\n"
+            "Искренне желаем вам скорейших успехов в поиске работы по месту жительства!",
+            True,
+            vahta_refusal_reason
+        )
+
     # =========================================================================
     # PRIMARY ENGINE: GOOGLE GEMINI LLM (Kupibilet / Tinkoff Style)
     # Полный живой анализ контекста диалога, мгновенная адаптация и естественный ответ
@@ -1290,6 +1346,10 @@ def generate_human_reply(cand_text: str, ad_title: str, cand_history_only: str =
                 if any(w in llm_lower for w in ["к сожалению", "не сможем", "не проходит", "отказ", "укомплектован"]):
                     is_disq = True
                     disq_reason = "Дисквалификация по регламенту (квота укомплектована / гражданство)"
+            elif any(w in llm_lower for w in ["только с вахтовым", "только вахт", "местных вакансий", "без выезда сейчас нет", "только на производстве в подольске", "только на производстве в", "только во владимире", "только в московской", "в вашем городе у нас открыты только"]):
+                if any(w in llm_lower for w in ["к сожалению", "на данный момент", "успехов в поиске", "нет"]):
+                    is_disq = True
+                    disq_reason = "Отказ от вахты / только местные вакансии"
 
             phone = extract_phone_number(cand_text)
             if phone and deal_id:

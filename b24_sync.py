@@ -820,26 +820,26 @@ def sync_candidate_to_b24_deal(chat_id: str, cand_data: dict, is_disqualified: b
             print(f"Age qualification err: {e_age}")
 
         if is_disqualified or is_age_disqualified:
-            upd_fields['CATEGORY_ID'] = 44
+            upd_fields['STAGE_ID'] = 'LOSE'
             if is_age_disqualified or 'возраст' in (disqualify_reason or '').lower():
-                upd_fields['STAGE_ID'] = 'C44:EXECUTING'        # Превышение возраста
                 upd_fields['UF_CRM_1768823747857'] = ['3134']  # Возраст
                 upd_fields['UF_CRM_1773129274833'] = '2862'    # Возраст (Направленные)
             elif any(k in (disqualify_reason or '').lower() for k in ['гражданств', 'паспорт', 'цыган', 'сб', 'безопасн']):
-                upd_fields['STAGE_ID'] = 'C44:PREPAYMENT_INVOIC' # Гражданство / Документы / СБ
                 upd_fields['UF_CRM_1768823747857'] = ['3136']  # Гражданство
                 upd_fields['UF_CRM_1773129274833'] = '2864'    # Гражданство (Направленные)
+            elif any(k in (disqualify_reason or '').lower() for k in ['вахт', 'местн', 'армавир', 'выезд', 'переезд', 'город']):
+                upd_fields['UF_CRM_1768823747857'] = ['204']   # Нецелевой
+                upd_fields['UF_CRM_1773129274833'] = '2888'    # Не рассматривает вахту
             else:
-                upd_fields['STAGE_ID'] = 'C44:NEW'              # Нецелевой отклик
                 upd_fields['UF_CRM_1768823747857'] = ['204']   # Нецелевой
                 upd_fields['UF_CRM_1773129274833'] = '2930'    # Иное
-            print(f"[SMART GUARD] Сделка #{deal_id} переведена в воронку Нецелевые (44, {upd_fields['STAGE_ID']}): {disqualify_reason or 'возраст/гражданство/СБ'}", flush=True)
+            print(f"[SMART GUARD] Сделка #{deal_id} переведена в LOSE: {disqualify_reason or 'нецелевой'}", flush=True)
             try:
                 call_b24('crm.timeline.comment.add', {
                     'fields': {
                         'ENTITY_ID': deal_id,
                         'ENTITY_TYPE': 'deal',
-                        'COMMENT': f"🚫 Нецелевой кандидат: {disqualify_reason or 'Несоответствие критериям вакансии'}. Сделка автоматически перемещена в воронку «Нецелевые»."
+                        'COMMENT': f"🛑 Нецелевой кандидат: {disqualify_reason or 'Несоответствие критериям вакансии'}. Сделка переведена в «Неуспех» (Отказ)."
                     }
                 })
             except Exception:
