@@ -80,7 +80,7 @@ VACANCY_CRITERIA = {
         "facility_title": "Тепофол Кашира (Женщины)",
         "keywords": ["кашир", "тепофол", "утеплит", "полиэтилен"],
         "min_age": 20,
-        "max_age": 55,
+        "max_age": 45,
         "allowed_citizenship": ["рф", "россия"],
         "summary_card": (
             "Вахта в Каширу МО\n\n"
@@ -111,7 +111,7 @@ VACANCY_CRITERIA = {
         "facility_title": "Тепофол Кашира (Мужчины)",
         "keywords": ["кашир", "грузчик", "тепофол"],
         "min_age": 20,
-        "max_age": 55,
+        "max_age": 45,
         "allowed_citizenship": ["рф", "россия"],
         "summary_card": (
             "Вахта в Каширу на пр-во теплоизоляционных изделий из вспененного полиэтилена\n"
@@ -138,7 +138,7 @@ VACANCY_CRITERIA = {
         "facility_title": "Арника Раменское",
         "keywords": ["арник", "раменск", "мебель"],
         "min_age": 20,
-        "max_age": 50,
+        "max_age": 45,
         "allowed_citizenship": ["рф", "россия"],
         "summary_card": (
             "Вахта в МО Раменское\n"
@@ -168,7 +168,7 @@ VACANCY_CRITERIA = {
         "facility_title": "АБИ Владимир",
         "keywords": ["аби", "владимир", "мясо", "колбас", "вязанк", "стародвор", "осипенко"],
         "min_age": 20,
-        "max_age": 50,
+        "max_age": 55,
         "allowed_citizenship": ["рф", "россия"],
         "summary_card": (
             "Вахта в г Владимир на пр-во \"Стародворские колбасы\"\n"
@@ -199,7 +199,7 @@ VACANCY_CRITERIA = {
         "facility_title": "Смарт Вахта (Женщины)",
         "keywords": ["смарт вахта", "зоотовары вахта", "кучино вахта"],
         "min_age": 20,
-        "max_age": 55,
+        "max_age": 45,
         "allowed_citizenship": ["рф", "россия"],
         "summary_card": (
             "Вахта на упаковку зоотоваров в МО Балашиха (Кучино)\n"
@@ -234,7 +234,7 @@ VACANCY_CRITERIA = {
         "facility_title": "Смарт Family (Местные)",
         "keywords": ["смарт", "балаших", "салтыков", "кучин", "новомилет", "зоо"],
         "min_age": 20,
-        "max_age": 55,
+        "max_age": 45,
         "allowed_citizenship": ["рф", "россия"],
         "summary_card": (
             "Носовихинское шоссе вл 253 с 14\n"
@@ -256,7 +256,7 @@ VACANCY_CRITERIA = {
         "facility_title": "Смарт Уборщица",
         "keywords": ["уборщиц", "клининг", "уборка"],
         "min_age": 20,
-        "max_age": 60,
+        "max_age": 45,
         "allowed_citizenship": ["рф", "россия"],
         "summary_card": (
             "Носовихинское шоссе вл 253 с 14\n"
@@ -277,7 +277,7 @@ VACANCY_CRITERIA = {
         "facility_title": "Смарт Пресс коробок",
         "keywords": ["пресс", "коробок", "ночь пресс"],
         "min_age": 20,
-        "max_age": 55,
+        "max_age": 45,
         "allowed_citizenship": ["рф", "россия"],
         "summary_card": (
             "Работа для мужчин\n"
@@ -300,7 +300,7 @@ VACANCY_CRITERIA = {
         "facility_title": "СДС Брехово",
         "keywords": ["сдс", "брехов", "брёхов", "электротовар", "электротоваров", "электрик", "электрика", "электрики", "склад электрики"],
         "min_age": 20,
-        "max_age": 50,
+        "max_age": 45,
         "allowed_citizenship": ["рф", "россия"],
         "summary_card": (
             "Брехово, территория Промплощадка, 1, городской округ Химки, Московская область, 141544\n"
@@ -322,7 +322,7 @@ VACANCY_CRITERIA = {
         "facility_title": "Бьюти Лайф (Женщины)",
         "keywords": ["бьюти", "бад", "складочн", "савеловск", "савёловск", "дмитровск"],
         "min_age": 20,
-        "max_age": 50,
+        "max_age": 45,
         "allowed_citizenship": ["рф", "россия"],
         "summary_card": (
             "УПАКОВКА БАДОВ\n"
@@ -343,7 +343,7 @@ VACANCY_CRITERIA = {
         "facility_title": "Бьюти Лайф (Грузчик)",
         "keywords": ["бад грузчик", "складочная грузчик"],
         "min_age": 20,
-        "max_age": 50,
+        "max_age": 45,
         "allowed_citizenship": ["рф", "россия"],
         "summary_card": (
             "Грузчик на Бады на Савёловской (ул Складочная д 1 стр 18 п 2)\n"
@@ -364,7 +364,7 @@ VACANCY_CRITERIA = {
         "facility_title": "Фарма Цвет (Женщины)",
         "keywords": ["фарма", "опалих", "красногорск", "трав", "чай упаковка"],
         "min_age": 20,
-        "max_age": 55,
+        "max_age": 45,
         "allowed_citizenship": ["рф", "россия"],
         "summary_card": (
             "Красногорск мкр Опалиха ул Мира 25\n"
@@ -389,7 +389,7 @@ VACANCY_CRITERIA = {
         "facility_title": "Фарма Цвет (Мужчины)",
         "keywords": ["резчик", "фасовщик чая"],
         "min_age": 20,
-        "max_age": 55,
+        "max_age": 45,
         "allowed_citizenship": ["рф", "россия"],
         "summary_card": (
             "Красногорск мкр Опалиха ул Мира 25\n"
@@ -414,7 +414,7 @@ VACANCY_CRITERIA = {
         "facility_title": "Автозапчасти Подольск",
         "keywords": ["автозапчаст", "подольск", "промтехальянс"],
         "min_age": 20,
-        "max_age": 50,
+        "max_age": 45,
         "allowed_citizenship": ["рф", "россия"],
         "summary_card": (
             "Складской комплекс автозапчастей для дорожной техники по адресу городской округ Подольск, д. 1 стр. 2, территория ПромТехАльянс.\n\n"
@@ -443,7 +443,7 @@ VACANCY_CRITERIA = {
         "facility_title": "Вахта с проживанием",
         "keywords": ["вахт"],
         "min_age": 20,
-        "max_age": 55,
+        "max_age": 45,
         "allowed_citizenship": ["рф", "россия"],
         "summary_card": (
             "Вахта от 30 смен с бесплатным проживанием\n"

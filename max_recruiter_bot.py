@@ -627,9 +627,8 @@ def forward_candidate_to_selection_chat(session: dict, attachments: list, state:
     else:
         responsible_name = "Анастасия Давыдова"
 
-    target_chat_id = get_object_chat_id(facility)
-    chat_info = OBJECT_CHATS.get(target_chat_id, {})
-    chat_title = chat_info.get("title", "Подбор")
+    PODBOR_PERSONALA_CHAT_ID = "-77633731398158"  # Чат «Подбор Персонала»
+    chat_title = "Подбор Персонала"
 
     summary_text = (
         f"📋 Новый кандидат на смену:\n"
@@ -643,29 +642,26 @@ def forward_candidate_to_selection_chat(session: dict, attachments: list, state:
     )
 
     photos_to_send = attachments or session.get("attachments") or []
-    send_max_message(chat_id=target_chat_id, text=summary_text, attachments=photos_to_send)
-    print(f"[MAX BOT] Кандидат {fio} переслан в чат '{chat_title}' ({target_chat_id})", flush=True)
+    # Отправляем выжимку и фото паспорта СТРОГО в чат «Подбор Персонала»! В остальные чаты отправка отключена!
+    send_max_message(chat_id=PODBOR_PERSONALA_CHAT_ID, text=summary_text, attachments=photos_to_send)
+    print(f"[MAX BOT] Кандидат {fio} переслан в чат '{chat_title}' ({PODBOR_PERSONALA_CHAT_ID})", flush=True)
 
+    # ВАЖНО: Сделка НЕ переводится в стадию [Направлен на смену] автоматически!
+    # Менеджер сначала связывается с кандидатом, после чего девочки направляют на смену вручную.
     if deal_id:
-        b24_sync.call_b24("crm.deal.update", {
-            "id": deal_id,
-            "fields": {
-                "STAGE_ID": "PREPAYMENT_INVOICE"
-            }
-        })
         b24_sync.call_b24("crm.timeline.comment.add", {
             "fields": {
                 "ENTITY_ID": deal_id,
                 "ENTITY_TYPE": "deal",
                 "COMMENT": (
                     f"📋 [МАКС БОТ]: Кандидат прислал фото паспорта и подтвердил заезд ({zaezd_date}).\n"
-                    f"Выжимка и паспорт пересланы в чат подбора: {chat_title}.\n"
-                    f"Ответственный: {responsible_name}.\n"
-                    f"Сделка переведена в стадию [Направлен на смену]."
+                    f"Выжимка и паспорт пересланы в рабочий чат «Подбор Персонала» в МАКС.\n"
+                    f"Объект: {facility}. Ответственный: {responsible_name}.\n"
+                    f"⚠️ ВНИМАНИЕ: Направление на смену НЕ выставлено. Менеджер сначала связывается с кандидатом, после чего направление оформляется вручную."
                 )
             }
         })
-        print(f"[MAX DIRECT] Сделка #{deal_id} переведена в [Направлен на смену]", flush=True)
+        print(f"[MAX DIRECT] Сделка #{deal_id}: выжимка сохранена, ожидает ручного направления на смену", flush=True)
 
         if responsible_id:
             try:
@@ -693,7 +689,7 @@ def handle_direct_dialog(user_id: int, text, attachments: list, state: dict):
 
     # Если кандидат уже направлен на смену — всегда подтверждаем бронь строго без номеров и ссылок
     if session.get("step") == "COMPLETED" or session.get("forwarded_to_group"):
-        send_max_message(user_id=user_id, text="Вы записаны, бронь готова! С вами скоро свяжется рекрутер.")
+        send_max_message(user_id=user_id, text="Паспорт получен! Менеджер службы подбора свяжется с вами для подтверждения данных и ответит на все вопросы.")
         return
 
 
@@ -940,6 +936,18 @@ def handle_direct_dialog(user_id: int, text, attachments: list, state: dict):
     # 6. Отработка согласия прислать фото
     if any(w in text_lower for w in ["да", "сейчас", "скину", "смогу", "отправлю", "хорошо", "ок", "минуту", "ща"]):
         reply = "Отлично, жду! Прикрепите фото разворота паспорта прямо сюда в чат для оформления пропуска."
+        send_max_message(user_id=user_id, text=reply)
+        return
+
+    # 6b. СТРОГИЙ ЗАПРЕТ НАЗЫВАТЬ АДРЕС ОБЪЕКТА (ЛЮБОГО)
+    addr_words = ["точный адрес", "какой адрес", "адрес склада", "адрес завода", "куда ехать", "где именно", "где находитесь", "назовите адрес", "где склад", "где завод"]
+    if any(w in text_lower for w in addr_words):
+        cur_fac = session.get("facility") or "вахтовый объект"
+        reply = (
+            f"По объекту ({cur_fac}): точный адрес производственной площадки и схему проезда вам предоставит "
+            "персональный координатор после телефонного согласования и оформления пропуска на КПП.\n\n"
+            "Напишите ваш контактный номер телефона для связи с координатором!"
+        )
         send_max_message(user_id=user_id, text=reply)
         return
 
