@@ -620,18 +620,17 @@ def run_dialer_step():
 
         print(f"\n🚀 [ИНИЦИАЦИЯ ВЫЗОВА В СОФТФОН UIS] {uname} (Employee ID: {emp_id}) -> Сделка #{did} | Тел кандидата: +{phone} | Линия: +{virt_phone} | Стадия: {st_label}", flush=True)
 
-        # Вызываем официальный метод UIS Call API start.employee_call:
-        # Звонок идет кандидату со строго закрепленной виртуальной линии рекрутера,
-        # и при ответе моментально коммутируется прямо в софтфон ответственного менеджера!
-        uis_res = call_uis_api("start.employee_call", {
+        AUTODIAL_VIRTUAL_NUMBER = "79677875304"  # Линия сценария автопрозвона с голосовым меню IVR (кнопка 1)
+
+        print(f"\n🚀 [ИНИЦИАЦИЯ ВЫЗОВА С IVR КНОПКА 1] {uname} -> Сделка #{did} | Тел кандидата: +{phone} | Номер сценария: +{AUTODIAL_VIRTUAL_NUMBER} | Стадия: {st_label}", flush=True)
+
+        # Вызываем официальный метод UIS Call API start.vnumber_call:
+        # Звонок идет кандидату с номера 79677875304, срабатывает сценарий автопрозвона с IVR (кнопка 1).
+        # Автоответчики отсекаются, а при нажатии 1 вызов переводится на ответственного менеджера!
+        uis_res = call_uis_api("start.vnumber_call", {
+            "virtual_phone_number": AUTODIAL_VIRTUAL_NUMBER,
             "first_call": "contact",
-            "contact": phone,
-            "employee": {"id": emp_id},
-            "virtual_phone_number": virt_phone,
-            "contact_message": {
-                "type": "tts",
-                "value": f"Здравствуйте! По поводу вашего отклика на работу на Авито. Пожалуйста, оставайтесь на линии, соединяю с менеджером."
-            }
+            "contact": phone
         })
 
         res_data = uis_res.get("result", {}).get("data", {})
@@ -660,7 +659,7 @@ def run_dialer_step():
             }
             save_state(state)
             if not is_manager_busy:
-                add_timeline_comment(did, f"📞 Автопрозвон НДЗ: Инициирован вызов кандидату +{phone} через UIS (прямое соединение с ответственным менеджером {uname}).\nЛиния: +{virt_phone}.\nСтадия: {st_label}.\nСессия UIS: {session_id}")
+                add_timeline_comment(did, f"📞 Автопрозвон НДЗ: Инициирован вызов кандидату +{phone} через сценарий UIS (IVR Меню с кнопкой 1).\nОтветственный менеджер: {uname}.\nСтадия: {st_label}.\nСессия UIS: {session_id}")
         else:
             print(f"❌ [ОШИБКА UIS] Не удалось запустить звонок для {uname} на +{phone}: {err}", flush=True)
 
