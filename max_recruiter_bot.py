@@ -627,8 +627,8 @@ def forward_candidate_to_selection_chat(session: dict, attachments: list, state:
     else:
         responsible_name = "Анастасия Давыдова"
 
-    PODBOR_PERSONALA_CHAT_ID = "-77633731398158"  # Чат «Подбор Персонала»
-    chat_title = "Подбор Персонала"
+    NAPRAVLENNYE_BOTOM_CHAT_ID = "-80901330304508"  # Чат «Направленные ботом»
+    chat_title = "Направленные ботом"
 
     summary_text = (
         f"📋 Новый кандидат на смену:\n"
@@ -642,26 +642,30 @@ def forward_candidate_to_selection_chat(session: dict, attachments: list, state:
     )
 
     photos_to_send = attachments or session.get("attachments") or []
-    # Отправляем выжимку и фото паспорта СТРОГО в чат «Подбор Персонала»! В остальные чаты отправка отключена!
-    send_max_message(chat_id=PODBOR_PERSONALA_CHAT_ID, text=summary_text, attachments=photos_to_send)
-    print(f"[MAX BOT] Кандидат {fio} переслан в чат '{chat_title}' ({PODBOR_PERSONALA_CHAT_ID})", flush=True)
+    # Отправляем выжимку и фото паспорта СТРОГО в чат «Направленные ботом»!
+    send_max_message(chat_id=NAPRAVLENNYE_BOTOM_CHAT_ID, text=summary_text, attachments=photos_to_send)
+    print(f"[MAX BOT] Кандидат {fio} переслан в чат '{chat_title}' ({NAPRAVLENNYE_BOTOM_CHAT_ID})", flush=True)
 
-    # ВАЖНО: Сделка НЕ переводится в стадию [Направлен на смену] автоматически!
-    # Менеджер сначала связывается с кандидатом, после чего девочки направляют на смену вручную.
     if deal_id:
+        b24_sync.call_b24("crm.deal.update", {
+            "id": deal_id,
+            "fields": {
+                "STAGE_ID": "PREPAYMENT_INVOICE"
+            }
+        })
         b24_sync.call_b24("crm.timeline.comment.add", {
             "fields": {
                 "ENTITY_ID": deal_id,
                 "ENTITY_TYPE": "deal",
                 "COMMENT": (
-                    f"📋 [МАКС БОТ]: Кандидат прислал фото паспорта и подтвердил заезд ({zaezd_date}).\n"
-                    f"Выжимка и паспорт пересланы в рабочий чат «Подбор Персонала» в МАКС.\n"
+                    f"🚀 [НАПРАВЛЕН БОТОМ НА СМЕНУ]: Кандидат прислал фото паспорта и подтвердил заезд ({zaezd_date}).\n"
+                    f"Выжимка и паспорт пересланы в рабочий чат «Направленные ботом» в МАКС.\n"
                     f"Объект: {facility}. Ответственный: {responsible_name}.\n"
-                    f"⚠️ ВНИМАНИЕ: Направление на смену НЕ выставлено. Менеджер сначала связывается с кандидатом, после чего направление оформляется вручную."
+                    f"Сделка переведена в стадию [Направлен на смену]."
                 )
             }
         })
-        print(f"[MAX DIRECT] Сделка #{deal_id}: выжимка сохранена, ожидает ручного направления на смену", flush=True)
+        print(f"[MAX DIRECT] Сделка #{deal_id} переведена в [Направлен на смену]", flush=True)
 
         if responsible_id:
             try:

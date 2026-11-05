@@ -23,6 +23,7 @@ from avito_api import AvitoClient
 from config import AVITO_CLIENT_ID, AVITO_CLIENT_SECRET, AVITO_USER_ID, AVITO_CABINETS
 from b24_sync import sync_candidate_to_b24_deal
 from llm_recruiter import generate_llm_reply
+from ai_engine import extract_phone
 from learning_system import match_learned_rule
 from session_memory import get_session_profile, update_session_profile, reset_session_profile
 

@@ -1058,13 +1058,14 @@ def find_b24_deal_by_phone(phone: str):
     return None
 
 
-# ID закрытого рабочего чата подбора персонала в МАКС (строго единственный целевой чат)
-PODBOR_PERSONALA_CHAT_ID = -77633731398158  # Чат «Подбор Персонала»
+# ID целевого закрытого чата в МАКС (чат «Направленные ботом»)
+NAPRAVLENNYE_BOTOM_CHAT_ID = -80901330304508  # Чат «Направленные ботом» (бот администратор)
 
-def send_to_podbor_personala_chat(summary_text: str, photo_url: str = None) -> bool:
+def send_to_napravlennye_botom_chat(summary_text: str, photo_url: str = None) -> bool:
     """
-    Отправляет выжимку по кандидату и фото паспорта СТРОГО в закрытый рабочий чат «Подбор Персонала».
-    В остальные чаты (чаты объектов) отправка ПОЛНОСТЬЮ ОТКЛЮЧЕНА по регламенту руководства.
+    Отправляет целевых кандидатов, готовых к выходу в ближайшее время, 
+    СТРОГО в рабочий чат «Направленные ботом» (-80901330304508).
+    В остальные чаты (чаты объектов и подбора) отправка отключена по регламенту руководства.
     """
     payload = {"text": summary_text}
     if photo_url:
@@ -1072,7 +1073,7 @@ def send_to_podbor_personala_chat(summary_text: str, photo_url: str = None) -> b
             "type": "image",
             "payload": {"url": photo_url}
         }]
-    url = f"{MAX_API_BASE}/messages?chat_id={PODBOR_PERSONALA_CHAT_ID}"
+    url = f"{MAX_API_BASE}/messages?chat_id={NAPRAVLENNYE_BOTOM_CHAT_ID}"
     req = urllib.request.Request(url, data=json.dumps(payload).encode('utf-8'), headers={
         "Authorization": TOKEN,
         "Content-Type": "application/json"
@@ -1080,15 +1081,17 @@ def send_to_podbor_personala_chat(summary_text: str, photo_url: str = None) -> b
     try:
         with urllib.request.urlopen(req, timeout=10, context=ctx) as r:
             res = json.loads(r.read().decode('utf-8'))
-            print(f"🚀 [ПОДБОР ПЕРСОНАЛА CHAT SENT]: {res.get('message', {}).get('body', {}).get('mid')}", flush=True)
+            print(f"🚀 [НАПРАВЛЕННЫЕ БОТОМ CHAT SENT]: {res.get('message', {}).get('body', {}).get('mid')}", flush=True)
             return True
     except Exception as e:
-        print(f"[ПОДБОР ПЕРСОНАЛА CHAT SEND ERR]: {e}", flush=True)
+        print(f"[НАПРАВЛЕННЫЕ БОТОМ CHAT SEND ERR]: {e}", flush=True)
         return False
 
-# Сохраняем обратную совместимость вызова:
 def send_to_object_selection_chat(object_tag: str, summary_text: str, photo_url: str = None) -> bool:
-    return send_to_podbor_personala_chat(summary_text, photo_url=photo_url)
+    return send_to_napravlennye_botom_chat(summary_text, photo_url=photo_url)
+
+def send_to_podbor_personala_chat(summary_text: str, photo_url: str = None) -> bool:
+    return send_to_napravlennye_botom_chat(summary_text, photo_url=photo_url)
 
 
 def dispatch_candidate_passport_submission(chat_id: int, st: dict, photo_url: str, fio: str = None, age: str = None):
@@ -1200,26 +1203,26 @@ def dispatch_candidate_passport_submission(chat_id: int, st: dict, photo_url: st
 
     print(f"📋 [CANDIDATE SUMMARY BUILT for Chat {chat_id} / Object {target_tag}]:\n{summary_text}", flush=True)
 
-    # Отправляем выжимку и фото паспорта СТРОГО в чат «Подбор Персонала» (в чаты объектов не отправляем!)
-    send_to_podbor_personala_chat(summary_text, photo_url=photo_url)
+    # Отправляем выжимку и фото паспорта целевого кандидата СТРОГО в чат «Направленные ботом»
+    send_to_napravlennye_botom_chat(summary_text, photo_url=photo_url)
 
-    # ВАЖНО: Сделка НЕ переводится в стадию «Направлен на смену» автоматически!
-    # Менеджер должен сначала связаться с кандидатом, после чего девочки вручную направляют на смену.
+    # Переводим сделку в Б24 в «Направлен на смену» (PREPAYMENT_INVOICE), добавляем в таймлайн и уведомляем менеджера
     if deal_id:
+        update_b24_deal_stage(deal_id, "PREPAYMENT_INVOICE")
         add_b24_timeline_comment(
             deal_id,
-            f"📋 [МАКС БОТ]: Кандидат прислал фото паспорта.\n"
-            f"Выжимка и паспорт направлены в рабочий чат «Подбор Персонала» в МАКС.\n"
+            f"🚀 [НАПРАВЛЕН БОТОМ НА СМЕНУ]: Целевой кандидат готов к выходу ({cand_date}).\n"
+            f"Выжимка и фото паспорта направлены в рабочий чат МАКС «Направленные ботом».\n"
             f"Объект: {header}. Ответственный: {mgr_name or 'Менеджер'}.\n"
-            f"⚠️ ВНИМАНИЕ: Направление на смену НЕ выставлено. Менеджер сначала связывается с кандидатом, после чего направление на смену оформляется вручную!\n"
-            f"Фото паспорта: {photo_url}"
+            f"Сделка переведена в стадию «Направлен на смену» (PREPAYMENT_INVOICE).\n"
+            f"Фото паспорта: {photo_url or 'в чате'}"
         )
         d_info = get_b24_deal(deal_id)
         mgr_id = d_info.get("ASSIGNED_BY_ID") if d_info else None
         if mgr_id:
             notify_b24_manager(
                 mgr_id,
-                f"⚡ ПАСПОРТ В МАКС: Кандидат {cand_fio} (сделка #{deal_id}) прислал фото паспорта! Выжимка направлена в чат «Подбор Персонала». Пожалуйста, свяжитесь с кандидатом перед ручным направлением на смену на объект {header}!"
+                f"🚀 НАПРАВЛЕН БОТОМ: Кандидат {cand_fio} (сделка #{deal_id}) готов к выходу на смену ({cand_date}) на объект {header}! Выжимка и паспорт отправлены в чат «Направленные ботом»."
             )
 
 
