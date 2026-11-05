@@ -608,7 +608,7 @@ def check_incoming_callbacks(state):
                         user_id = d_res[0].get("ASSIGNED_BY_ID")
 
             if not user_id or str(user_id) == "0":
-                continue
+                user_id = 82166  # По умолчанию оповещаем РОПа (Валерию Цицилину), если ответственный не определен
 
             target_uid = int(user_id)
             if deal_id:
