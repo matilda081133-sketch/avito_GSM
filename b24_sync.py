@@ -639,22 +639,20 @@ def sync_candidate_to_b24_deal(chat_id: str, cand_data: dict, is_disqualified: b
         # ассистента КАТЕГОРИЧЕСКИ НЕ ДОЛЖНЫ создавать новую сделку или возвращать её в NEW!
         # =====================================================================
         if current_deal and current_deal.get('STAGE_ID') == 'LOSE':
-            # Если сделка была в архиве, но кандидат теперь прислал номер телефона И не дисквалифицирован:
-            if phone and not is_disqualified:
-                print(f"[B24 SYNC] Чат {chat_id} привязан к сделке #{current_deal.get('ID')} (LOSE), но кандидат прислал номер {phone}. Возвращаем в работу!", flush=True)
-            else:
-                print(f'[B24 SYNC] 🛑 Чат {chat_id} привязан к архивной сделке #{current_deal.get("ID")} (LOSE). Оставляем в архиве.', flush=True)
-                try:
-                    call_b24('crm.timeline.comment.add', {
-                        'fields': {
-                            'ENTITY_ID': current_deal.get('ID'),
-                            'ENTITY_TYPE': 'deal',
-                            'COMMENT': f'ℹ️ [Архивный диалог] Зафиксирована переписка по чату {chat_id}. Сделка оставлена в архиве (LOSE) согласно регламенту.'
-                        }
-                    })
-                except Exception:
-                    pass
-                return DealSyncResult(current_deal.get('ID'), current_deal.get('ASSIGNED_BY_ID'), False)
+            # ЖЕЛЕЗНЫЙ ЗАПРЕТ: Сделка УЖЕ закрыта в Неуспех (LOSE)!
+            # Робот КАТЕГОРИЧЕСКИ НЕ ИМЕЕТ ПРАВА оживлять закрытые сделки!
+            print(f'[B24 SYNC] 🛑 Чат {chat_id} привязан к архивной сделке #{current_deal.get("ID")} (LOSE). Оставляем в архиве.', flush=True)
+            try:
+                call_b24('crm.timeline.comment.add', {
+                    'fields': {
+                        'ENTITY_ID': current_deal.get('ID'),
+                        'ENTITY_TYPE': 'deal',
+                        'COMMENT': f'ℹ️ [Архивный диалог] Зафиксирована активность кандидата в чате {chat_id} (тел: {phone or "не указан"}). Сделка оставлена в Неуспехе (LOSE) согласно решению рекрутера.'
+                    }
+                })
+            except Exception:
+                pass
+            return DealSyncResult(current_deal.get('ID'), current_deal.get('ASSIGNED_BY_ID'), False)
 
         # =====================================================================
         # СТРОЖАЙШЕЕ ПРАВИЛО: API НИКОГДА НЕ СОЗДАЕТ СДЕЛКИ!
@@ -854,12 +852,8 @@ def sync_candidate_to_b24_deal(chat_id: str, cand_data: dict, is_disqualified: b
             print(f"[SMART GUARD] Сделка #{deal_id} переведена в LOSE: отсутствует номер телефона (причина 3132: Номер отсутствует)", flush=True)
 
         elif deal_phone and current_deal and current_deal.get('STAGE_ID') == 'LOSE':
-            old_reasons = current_deal.get('UF_CRM_1768823747857') or []
-            if any(r in str(old_reasons) for r in ['3132', '2686']) or not old_reasons:
-                upd_fields['STAGE_ID'] = 'NEW'
-                upd_fields['UF_CRM_1768823747857'] = []
-                upd_fields['UF_CRM_1773129274833'] = ''
-                print(f"[SMART GUARD] Сделка #{deal_id} возвращена из архива в работу (получен номер {deal_phone})!", flush=True)
+            # ЖЕЛЕЗНЫЙ ЗАПРЕТ: Сделки из LOSE никогда не возвращаются в NEW автоматически!
+            pass
 
         if upd_fields:
             call_b24('crm.deal.update', {'id': deal_id, 'fields': upd_fields})
