@@ -41,7 +41,9 @@ B24_NOTIFY_WEBHOOK_URL = "https://b24-4qx38o.bitrix24.ru/rest/82166/lhremlfdcrav
 UIS_CALL_API_URL = "https://callapi.uiscom.ru/v4.0"
 UIS_ACCESS_TOKENS = [
     "mf050x3n53jnp4dft29ww26x7jm4y33rd6sd5rgw",  # Токен #1 (основной)
-    "yhnf7ukxduk42l54v3j3psuenis3ufqni3d80nrr"   # Токен #2 (резервный / расширение до 1000 звонков)
+    "yhnf7ukxduk42l54v3j3psuenis3ufqni3d80nrr",  # Токен #2 (Виктория)
+    "4ee5pel24c6mq1jg6px5f8nqz78hadn6swtwu9hl",  # Токен #3 (Валерия)
+    "f0ph35x1p1um1p4n5hzb47ulj3gld9btkfsistsu"   # Токен #4 (Валерия)
 ]
 UIS_ACCESS_TOKEN = UIS_ACCESS_TOKENS[0]
 _current_token_idx = 0
