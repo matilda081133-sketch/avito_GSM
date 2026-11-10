@@ -304,68 +304,149 @@ def normalize_phone_for_uis(phone_raw):
         ph = '7' + ph
     return ph
 
-ALL_NDZ_STAGES = ["UC_NDZ2", "EXECUTING", "UC_NDZ3", "UC_REQ_PASSPORT"]
-_recruiter_stage_indices = {}
+NDZ_ONLY_STAGES = ["UC_NDZ2", "EXECUTING", "UC_NDZ3"]
+IN_WORK_STAGES = ["PREPARATION", "UC_G0AG7S"]  # В работе МЕСТНЫЕ и В работе ВАХТА
+ALL_ROTATION_GROUPS = ["NDZ", "PASSPORT", "IN_WORK"]
+_recruiter_ndz_indices = {}
+_recruiter_in_work_indices = {}
 
-def get_next_ndz_deal_for_recruiter(user_id, called_today):
+def get_next_ndz_deal_for_recruiter(user_id, called_today, state=None):
     """
-    Выбирает сделку менеджера со справедливой ротацией стадий (Round-Robin).
-    Исключает голодание стадий НДЗ 2, НДЗ 3 и Запрос паспорта из-за большого числа новых откликов в НДЗ 1.
-    Соблюдает строгую паузу 2.5 часа между повторными звонками одному кандидату.
+    Выбирает сделку менеджера со строгим циклическим чередованием 3 очередей:
+    НДЗ ➔ Запрос паспорта ➔ В работе ➔ НДЗ...
+    Правила:
+    1. НДЗ: каскад стадий (НДЗ 1 -> НДЗ 2 -> НДЗ 3).
+    2. Запрос паспорта: до 3 попыток на сделку, стадию НЕ меняем, в Неуспех НЕ кидаем.
+    3. В работе: до 3 попыток на сделку, стадию НЕ меняем, в Неуспех НЕ кидаем.
+    Интервал между звонками одному соискателю строго не менее 2.5 часов (9000 сек).
     """
-    curr_idx = _recruiter_stage_indices.get(user_id, 0)
-    ordered_stages = [ALL_NDZ_STAGES[(curr_idx + i) % len(ALL_NDZ_STAGES)] for i in range(len(ALL_NDZ_STAGES))]
+    if state is None:
+        state = {}
 
-    for st in ordered_stages:
-        filt = {
-            "ASSIGNED_BY_ID": user_id,
-            "STAGE_ID": st
-        }
-        # Для стадии «Запрос паспорта» прозваниваем СТРОГО сделки старше 5 дней (> 5 дней)
-        # Свежие сделки рекрутеры ведут вручную!
-        if st == "UC_REQ_PASSPORT":
-            five_days_ago_str = (datetime.now(MSK_TZ) - timedelta(days=5)).strftime("%Y-%m-%d %H:%M:%S")
-            filt["<=DATE_CREATE"] = five_days_ago_str
-        res = call_b24("crm.deal.list", {
-            "order": {"ID": "DESC"},
-            "filter": filt,
-            "select": ["ID", "TITLE", "STAGE_ID", "ASSIGNED_BY_ID", "COMMENTS", "CONTACT_ID", "DATE_CREATE"],
-            "limit": 25
-        })
-        deals = res.get("result", [])
-        for d in deals:
-            did = str(d.get("ID"))
-            # Двойная проверка в Python: для «Запрос паспорта» строго старше 5 дней (5 * 86400 сек)
-            if st == "UC_REQ_PASSPORT":
-                dc = d.get("DATE_CREATE") or ""
-                try:
-                    dc_dt = datetime.fromisoformat(dc[:19]).replace(tzinfo=MSK_TZ)
-                    if (datetime.now(MSK_TZ) - dc_dt).total_seconds() < 5 * 86400:
-                        continue
-                except Exception:
-                    pass
-            # Антиспам-пауза 2.5 часа (9000 сек)
-            last_info = called_today.get(did)
-            if last_info:
-                last_t = last_info.get("timestamp", 0)
-                if time.time() - last_t < 9000:
+    recruiter_last_group = state.setdefault("recruiter_last_group", {})
+    last_grp = recruiter_last_group.get(str(user_id), "IN_WORK")
+    
+    # Определяем порядок проверки групп
+    try:
+        start_idx = (ALL_ROTATION_GROUPS.index(last_grp) + 1) % len(ALL_ROTATION_GROUPS)
+    except ValueError:
+        start_idx = 0
+    ordered_groups = [ALL_ROTATION_GROUPS[(start_idx + i) % len(ALL_ROTATION_GROUPS)] for i in range(len(ALL_ROTATION_GROUPS))]
+
+    attempts_tracker = state.setdefault("attempts_tracker", {})
+
+    for grp in ordered_groups:
+        if grp == "PASSPORT":
+            # Очередь «Запрос паспорта»
+            res = call_b24("crm.deal.list", {
+                "order": {"ID": "DESC"},
+                "filter": {
+                    "ASSIGNED_BY_ID": user_id,
+                    "STAGE_ID": "UC_REQ_PASSPORT"
+                },
+                "select": ["ID", "TITLE", "STAGE_ID", "ASSIGNED_BY_ID", "COMMENTS", "CONTACT_ID", "DATE_CREATE"],
+                "limit": 30
+            })
+            deals = res.get("result", [])
+            for d in deals:
+                did = str(d.get("ID"))
+                # Максимум 3 попытки дозвона на сделку
+                att = attempts_tracker.get(did, {}).get("attempts", 0)
+                if att >= 3:
                     continue
-            phone = extract_phone_from_deal(d)
-            if phone:
-                norm_ph = normalize_phone_for_uis(phone)
-                if len(norm_ph) == 11:
-                    # Сдвигаем индекс стадии для следующего звонка этого рекрутера
-                    st_pos = ALL_NDZ_STAGES.index(st)
-                    _recruiter_stage_indices[user_id] = (st_pos + 1) % len(ALL_NDZ_STAGES)
-                    return d, norm_ph, st
+                # Антиспам-пауза 2.5 часа (9000 сек)
+                last_info = called_today.get(did)
+                if last_info:
+                    last_t = last_info.get("timestamp", 0)
+                    if time.time() - last_t < 9000:
+                        continue
+                phone = extract_phone_from_deal(d)
+                if phone:
+                    norm_ph = normalize_phone_for_uis(phone)
+                    if len(norm_ph) == 11:
+                        recruiter_last_group[str(user_id)] = "PASSPORT"
+                        return d, norm_ph, "UC_REQ_PASSPORT"
+
+        elif grp == "IN_WORK":
+            # Очередь «В работе» (PREPARATION = Местные, UC_G0AG7S = Вахта)
+            curr_iw_idx = _recruiter_in_work_indices.get(user_id, 0)
+            ordered_iw = [IN_WORK_STAGES[(curr_iw_idx + i) % len(IN_WORK_STAGES)] for i in range(len(IN_WORK_STAGES))]
+            
+            for st in ordered_iw:
+                res = call_b24("crm.deal.list", {
+                    "order": {"ID": "DESC"},
+                    "filter": {
+                        "ASSIGNED_BY_ID": user_id,
+                        "STAGE_ID": st
+                    },
+                    "select": ["ID", "TITLE", "STAGE_ID", "ASSIGNED_BY_ID", "COMMENTS", "CONTACT_ID", "DATE_CREATE"],
+                    "limit": 30
+                })
+                deals = res.get("result", [])
+                for d in deals:
+                    did = str(d.get("ID"))
+                    # Максимум 3 попытки дозвона на сделку
+                    att = attempts_tracker.get(did, {}).get("attempts", 0)
+                    if att >= 3:
+                        continue
+                    # Антиспам-пауза 2.5 часа (9000 сек)
+                    last_info = called_today.get(did)
+                    if last_info:
+                        last_t = last_info.get("timestamp", 0)
+                        if time.time() - last_t < 9000:
+                            continue
+                    phone = extract_phone_from_deal(d)
+                    if phone:
+                        norm_ph = normalize_phone_for_uis(phone)
+                        if len(norm_ph) == 11:
+                            st_pos = IN_WORK_STAGES.index(st)
+                            _recruiter_in_work_indices[user_id] = (st_pos + 1) % len(IN_WORK_STAGES)
+                            recruiter_last_group[str(user_id)] = "IN_WORK"
+                            return d, norm_ph, st
+
+        elif grp == "NDZ":
+            # Очередь «НДЗ» (Round-robin между EXECUTING, UC_NDZ2, UC_NDZ3)
+            curr_idx = _recruiter_ndz_indices.get(user_id, 0)
+            ordered_stages = [NDZ_ONLY_STAGES[(curr_idx + i) % len(NDZ_ONLY_STAGES)] for i in range(len(NDZ_ONLY_STAGES))]
+
+            for st in ordered_stages:
+                res = call_b24("crm.deal.list", {
+                    "order": {"ID": "DESC"},
+                    "filter": {
+                        "ASSIGNED_BY_ID": user_id,
+                        "STAGE_ID": st
+                    },
+                    "select": ["ID", "TITLE", "STAGE_ID", "ASSIGNED_BY_ID", "COMMENTS", "CONTACT_ID", "DATE_CREATE"],
+                    "limit": 25
+                })
+                deals = res.get("result", [])
+                for d in deals:
+                    did = str(d.get("ID"))
+                    # Антиспам-пауза 2.5 часа (9000 сек)
+                    last_info = called_today.get(did)
+                    if last_info:
+                        last_t = last_info.get("timestamp", 0)
+                        if time.time() - last_t < 9000:
+                            continue
+                    phone = extract_phone_from_deal(d)
+                    if phone:
+                        norm_ph = normalize_phone_for_uis(phone)
+                        if len(norm_ph) == 11:
+                            st_pos = NDZ_ONLY_STAGES.index(st)
+                            _recruiter_ndz_indices[user_id] = (st_pos + 1) % len(NDZ_ONLY_STAGES)
+                            recruiter_last_group[str(user_id)] = "NDZ"
+                            return d, norm_ph, st
+
     return None, None, None
 
-def advance_deal_stage(did, current_stage, recruiter_name, fail_reason):
+def advance_deal_stage(did, current_stage, recruiter_name, fail_reason, state=None):
     """
-    Переводит сделку строго на следующий этап после подтвержденного недозвона робота:
-    НДЗ 1 (EXECUTING) -> НДЗ 2 (UC_NDZ2)
-    НДЗ 2 (UC_NDZ2) -> НДЗ 3 (UC_NDZ3)
-    НДЗ 3 (UC_NDZ3) -> остается в НДЗ 3 (закрытие в Неуспех в 18:00)
+    Обрабатывает исход недозвона:
+    1. НДЗ 1 (EXECUTING) -> НДЗ 2 (UC_NDZ2)
+    2. НДЗ 2 (UC_NDZ2) -> НДЗ 3 (UC_NDZ3)
+    3. НДЗ 3 (UC_NDZ3) -> остается в НДЗ 3 (закрытие в Неуспех в 18:00)
+    4. Запрос паспорта (UC_REQ_PASSPORT) -> строго 3 попытки, стадию НЕ меняем, в Неуспех НЕ кидаем!
+    5. В работе (PREPARATION / UC_G0AG7S) -> строго 3 попытки, стадию НЕ меняем, в Неуспех НЕ кидаем!
     """
     if current_stage == "EXECUTING":
         call_b24("crm.deal.update", {
@@ -388,8 +469,45 @@ def advance_deal_stage(did, current_stage, recruiter_name, fail_reason):
         print(f"ℹ️ [НЕДОЗВОН 3] Сделка #{did} ({recruiter_name}) остается в UC_NDZ3 до 18:00", flush=True)
 
     elif current_stage == "UC_REQ_PASSPORT":
-        add_timeline_comment(did, f"🤖 Автопрозвон: Недозвон на стадии «Запрос паспорта» ({fail_reason}).\nСтадия сохранена без изменений (ручной перенос рекрутером).\nСледующий звонок не ранее чем через 2.5 часа (защита от спама).")
-        print(f"ℹ️ [НЕДОЗВОН ЗАПРОС ПАСПОРТА] Сделка #{did} ({recruiter_name}) остается в UC_REQ_PASSPORT (стадия сохранена)", flush=True)
+        attempts = 1
+        if state is not None:
+            tracker = state.setdefault("attempts_tracker", {})
+            info = tracker.get(str(did), {"attempts": 0})
+            attempts = info.get("attempts", 0) + 1
+            tracker[str(did)] = {
+                "attempts": attempts,
+                "stage": "UC_REQ_PASSPORT",
+                "last_call": time.time(),
+                "date": datetime.now(MSK_TZ).strftime("%Y-%m-%d")
+            }
+
+        if attempts >= 3:
+            add_timeline_comment(did, f"🤖 [B]Автопрозвон (Запрос паспорта):[/B] Совершены все 3 попытки дозвона ({fail_reason}).\nЛимит автодозвона исчерпан (3 попытки).\n[B]Стадия сохранена без изменений[/B] для ручной работы рекрутера (в Неуспех не переводится).")
+            print(f"ℹ️ [3 ПОПЫТКИ ЗАВЕРШЕНЫ / ЗАПРОС ПАСПОРТА] Сделка #{did} ({recruiter_name}) сохранена в стадии UC_REQ_PASSPORT", flush=True)
+        else:
+            add_timeline_comment(did, f"🤖 [B]Автопрозвон (Запрос паспорта):[/B] Попытка дозвона {attempts}/3 — недозвон ({fail_reason}).\nСтадия сохранена без изменений. Следующий звонок через 2.5 часа.")
+            print(f"ℹ️ [НЕДОЗВОН {attempts}/3 ЗАПРОС ПАСПОРТА] Сделка #{did} ({recruiter_name}) остается в UC_REQ_PASSPORT", flush=True)
+
+    elif current_stage in IN_WORK_STAGES:
+        st_title = "В работе (Местные)" if current_stage == "PREPARATION" else "В работе (Вахта)"
+        attempts = 1
+        if state is not None:
+            tracker = state.setdefault("attempts_tracker", {})
+            info = tracker.get(str(did), {"attempts": 0})
+            attempts = info.get("attempts", 0) + 1
+            tracker[str(did)] = {
+                "attempts": attempts,
+                "stage": current_stage,
+                "last_call": time.time(),
+                "date": datetime.now(MSK_TZ).strftime("%Y-%m-%d")
+            }
+
+        if attempts >= 3:
+            add_timeline_comment(did, f"🤖 [B]Автопрозвон ({st_title}):[/B] Совершены все 3 попытки дозвона ({fail_reason}).\nЛимит автодозвона исчерпан (3 попытки).\n[B]Стадия сохранена без изменений[/B] для ручной работы рекрутера (в Неуспех не переводится).")
+            print(f"ℹ️ [3 ПОПЫТКИ ЗАВЕРШЕНЫ / {st_title}] Сделка #{did} ({recruiter_name}) сохранена в стадии {current_stage}", flush=True)
+        else:
+            add_timeline_comment(did, f"🤖 [B]Автопрозвон ({st_title}):[/B] Попытка дозвона {attempts}/3 — недозвон ({fail_reason}).\nСтадия сохранена без изменений. Следующий звонок через 2.5 часа.")
+            print(f"ℹ️ [НЕДОЗВОН {attempts}/3 {st_title}] Сделка #{did} ({recruiter_name}) остается в {current_stage}", flush=True)
 
 def check_pending_calls(state):
     """
@@ -457,20 +575,21 @@ def check_pending_calls(state):
             # Кандидат взял трубку (для стадии «Запрос паспорта» достаточно факта успешного ответа dur >= 3)
             candidate_answered = (failed_code == "200" and dur >= 7) or (init_stage == "UC_REQ_PASSPORT" and failed_code == "200" and dur >= 3)
             if candidate_answered:
+                state.setdefault("attempts_tracker", {}).pop(str(did), None)
                 notify_candidate_pressed_one(user_id, did, dtitle, phone, initial_stage=init_stage, manager_in_line=manager_in_line)
                 del pending[session_id]
                 save_state(state)
                 continue
 
             fail_reason = f"сброс/не ответил ({dur}с, код {failed_code})"
-            advance_deal_stage(did, init_stage, recruiter_name, fail_reason)
+            advance_deal_stage(did, init_stage, recruiter_name, fail_reason, state=state)
             del pending[session_id]
             save_state(state)
 
         elif elapsed > 180:
             # Звонок старше 3 минут — гарантированный таймаут/сброс
             fail_reason = "таймаут/не ответил (>3 мин)"
-            advance_deal_stage(did, init_stage, recruiter_name, fail_reason)
+            advance_deal_stage(did, init_stage, recruiter_name, fail_reason, state=state)
             del pending[session_id]
             save_state(state)
 
@@ -683,7 +802,7 @@ def run_dialer_step():
             continue
 
         # Получаем следующую сделку для этого менеджера (строго его личную!)
-        deal, phone, stage = get_next_ndz_deal_for_recruiter(uid, called_today)
+        deal, phone, stage = get_next_ndz_deal_for_recruiter(uid, called_today, state=state)
         if not deal:
             continue
 
@@ -693,7 +812,7 @@ def run_dialer_step():
 
         did = deal.get("ID")
         dtitle = deal.get("TITLE")
-        stage_names = {"EXECUTING": "НДЗ 1", "UC_NDZ2": "НДЗ 2", "UC_NDZ3": "НДЗ 3", "UC_REQ_PASSPORT": "Запрос паспорта"}
+        stage_names = {"EXECUTING": "НДЗ 1", "UC_NDZ2": "НДЗ 2", "UC_NDZ3": "НДЗ 3", "UC_REQ_PASSPORT": "Запрос паспорта", "PREPARATION": "В работе (Местные)", "UC_G0AG7S": "В работе (Вахта)"}
         st_label = stage_names.get(stage, stage)
 
         is_manager_busy = (emp_id in busy_emp_ids) or (virt_phone in busy_virt_phones)
