@@ -77,7 +77,8 @@ RECRUITERS = {
     }
 }
 
-INTERVAL_SECONDS = 180  # Ровно 3 минуты между звонками на одного менеджера
+INTERVAL_NO_ANSWER = 90   # 90 секунд (1.5 мин) после недозвона — ускоренный прогон базы
+INTERVAL_TALK = 180        # 180 секунд (3 мин) после разговора — пауза для заполнения сделки
 STATE_FILE = os.path.join(os.path.dirname(__file__), "ndz_dialer_state.json")
 
 def call_b24(method, params=None):
@@ -576,12 +577,14 @@ def check_pending_calls(state):
             candidate_answered = (failed_code == "200" and dur >= 7) or (init_stage == "UC_REQ_PASSPORT" and failed_code == "200" and dur >= 3)
             if candidate_answered:
                 state.setdefault("attempts_tracker", {}).pop(str(did), None)
+                state.setdefault("recruiter_interval", {})[str(user_id)] = INTERVAL_TALK
                 notify_candidate_pressed_one(user_id, did, dtitle, phone, initial_stage=init_stage, manager_in_line=manager_in_line)
                 del pending[session_id]
                 save_state(state)
                 continue
 
             fail_reason = f"сброс/не ответил ({dur}с, код {failed_code})"
+            state.setdefault("recruiter_interval", {})[str(user_id)] = INTERVAL_NO_ANSWER
             advance_deal_stage(did, init_stage, recruiter_name, fail_reason, state=state)
             del pending[session_id]
             save_state(state)
@@ -589,6 +592,7 @@ def check_pending_calls(state):
         elif elapsed > 180:
             # Звонок старше 3 минут — гарантированный таймаут/сброс
             fail_reason = "таймаут/не ответил (>3 мин)"
+            state.setdefault("recruiter_interval", {})[str(user_id)] = INTERVAL_NO_ANSWER
             advance_deal_stage(did, init_stage, recruiter_name, fail_reason, state=state)
             del pending[session_id]
             save_state(state)
@@ -795,10 +799,11 @@ def run_dialer_step():
         emp_id = uinfo["uis_employee_id"]
         virt_phone = uinfo["virtual_phone"]
 
-        # 1. Проверка интервала 3 минуты (180 сек) между запусками автодозвона
+        # 1. Динамическая проверка интервала (90с при недозвоне / 180с после разговора)
+        rec_interval = state.setdefault("recruiter_interval", {}).get(uid_str, INTERVAL_NO_ANSWER)
         last_t = last_call_time.get(uid_str, 0)
         time_since_last = time.time() - last_t
-        if time_since_last < INTERVAL_SECONDS:
+        if time_since_last < rec_interval:
             continue
 
         # Получаем следующую сделку для этого менеджера (строго его личную!)
