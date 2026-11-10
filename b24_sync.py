@@ -872,6 +872,19 @@ def sync_candidate_to_b24_deal(chat_id: str, cand_data: dict, is_disqualified: b
                 except Exception:
                     pass
 
+        # Автоматическая проверка гражданства из текста резюме / комментариев сделки
+        cand_cit_from_comm = ""
+        m_cit = re.search(r'Гражданство(?: соискателя)?:?\[?/B\]?\s*([^\n\r\[]+)', comments, re.IGNORECASE)
+        if m_cit:
+            cand_cit_from_comm = m_cit.group(1).strip()
+
+        effective_cit = cand_data.get('citizenship') or cand_cit_from_comm or ''
+        if effective_cit:
+            is_rf = any(r in effective_cit.lower() for r in ['росси', 'рф', 'русск'])
+            if not is_rf:
+                is_disqualified = True
+                disqualify_reason = f"Гражданство «{effective_cit}» (требуется строго РФ)"
+
         is_age_disqualified = False
         try:
             cand_age_num = int(age) if age and str(age).isdigit() else 0
